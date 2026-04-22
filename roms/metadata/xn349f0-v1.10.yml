@@ -1,0 +1,14 @@
+part_number: XN349F0
+version: "1.10"
+date: 1994-01-20
+device: Yamaha DMP9 / DMP9-16
+copyright_string: "Digital Mixing Processor  YAMAHA Corp.  Copyright 1994"
+rom_type: TMS27C240-10
+size_bytes: 524288
+entry_point: "0x0003B3F0"
+cpu: TMP68301
+cpu_notes: Toshiba TMP68301, 68000 core with integrated MFP/UART
+sha256: PLACEHOLDER
+notes: |
+  First 1994 revision. Likely contains MIDI and scene memory fixes
+  over v1.02. See analysis/diffs/v102-v110.md.

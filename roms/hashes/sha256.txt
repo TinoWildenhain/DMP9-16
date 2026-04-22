@@ -1,0 +1,11 @@
+# SHA256 hashes of known DMP9/16 ROM images
+# Format: <hash>  <filename>
+#
+# Update this file when new verified dumps are added.
+# Do NOT commit ROM binary files to this repository.
+#
+# PLACEHOLDER - fill in with actual sha256sum output from your verified dumps:
+#
+# <sha256_v1.02_here>  TMS27C240-10-DMP9-16-XN349E0-v1.02-10.11.1993.bin
+# <sha256_v1.10_here>  TMS27C240-10-DMP9-16-XN349F0-v1.10-20.01.1994.bin
+# <sha256_v1.11_here>  TMS27C240-10-DMP9-16-XN349G0-v1.11-10.03.1994.bin

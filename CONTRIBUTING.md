@@ -1,41 +1,38 @@
-# Contributing to DMP9-16 RE
+# Contributing
 
-Thank you for your interest in contributing to this preservation project.
+This is a reverse engineering research project. Contributions are welcome
+if they advance the understanding of the Yamaha DMP9/16 firmware.
 
-## What contributions are welcome
+## Ground rules
 
-- Improved Ghidra scripts and annotations
-- Additional hardware documentation
-- Emulator harness improvements
-- Corrected or extended analysis notes
-- Reconstructed C code improvements
-- Version diff analysis
-- Bug fixes in tooling
+- Do not commit actual ROM binary files. See `roms/README.md`.
+- All uncertain items must be tagged `RE_NOTE:` in code and docs.
+- Keep commit messages descriptive (`re: identify lcd_write_cmd at 0x238C`).
+- Use the branch structure defined in `docs/workflow.md`.
 
-## What NOT to contribute
+## What to contribute
 
-- Original Yamaha ROM binary files
-- Any copyrighted Yamaha materials
-- Speculative or unverified hardware claims without notes
+- Ghidra function annotations (exported as `.gzf` patches or documented in `analysis/`)
+- Hardware register corrections or additions to `src/hw/`
+- Confirmed function recoveries in `src/firmware/`
+- Version diff findings in `analysis/diffs/`
+- Emulator improvements in `emulator/`
+- Documentation fixes
 
-## Branch model
+## RE_NOTE convention
 
-- `main` — stable shared tooling, docs, scripts
-- `rom/v1.02` — analysis specific to XN349E0 v1.02 (1993-11-10)
-- `rom/v1.10` — analysis specific to XN349F0 v1.10 (1994-01-20)
-- `rom/v1.11` — analysis specific to XN349G0 v1.11 (1994-03-10) — **canonical**
-- `feature/*` — active development branches
+Mark anything unverified:
 
-## Commit messages
+```c
+// RE_NOTE: parameter encoding unconfirmed, inferred from SPX-900 manual
+uint16_t reverb_time_encode(uint16_t ms) { ... }
+```
 
-Keep them descriptive. Prefix with area:
-- `ghidra:` for script changes
-- `analysis:` for notes and diffs
-- `emulator:` for emulator harness
-- `src:` for reconstructed C code
-- `docs:` for documentation
-- `tools:` for helper scripts
+Remove the tag only after confirming against ROM disassembly.
 
-## Questions
+## Pull requests
 
-Open a GitHub Issue with the `question` label.
+Open a PR against `main`. Describe:
+1. What you found / fixed
+2. How you verified it (Ghidra address, ROM version, reference source)
+3. Any remaining uncertainty (RE_NOTE items)

@@ -1,0 +1,36 @@
+# ROM binaries — do NOT commit original Yamaha firmware images
+*.bin
+*.rom
+*.hex
+*.eprom
+
+# Ghidra project files (large, machine-specific)
+*.gpr
+*.rep/
+*.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Build output
+*.o
+*.elf
+*.lst
+*.map
+
+# OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Editor
+.vscode/
+.idea/
+*.sublime-workspace

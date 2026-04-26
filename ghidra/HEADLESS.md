@@ -5,17 +5,42 @@ a fully annotated project that can then be opened for decompiler output export.
 
 ## Prerequisites
 
-- Ghidra 11.x or 12.x installed at a writable path (not snap)
-- `tmp68301.cspec` installed — see `ghidra/lang/INSTALL.md`
-- `ghidra/scripts/` on the Ghidra script path
+- Ghidra **12.0.4** installed at a writable path (not snap) — set `$GHIDRAHOME`
+- `ghidra/lang/tmp68301.cspec` and `ghidra/lang/68000.ldefs` installed (see `ghidra/lang/INSTALL.md`)
+- `ghidra/scripts/` contains: `TMP68301_Setup.java`, `DMP9_Board_Setup.java`,
+  `DMP9_FuncFixup.java`, `DMP9_LibMatch.java`
 
-## One-shot: import + analyse + annotate (single ROM)
+## Quick start (all three ROMs)
 
-```sh
-GHIDRA=$HOME/opt/ghidra_12.0.4_PUBLIC
-SCRIPTS=$HOME/DMP9-16/ghidra/scripts
-ROMS=$HOME/DMP9-16/roms
-PROJECTS=$HOME/ghidra_projects
+```bash
+export GHIDRAHOME=/path/to/ghidra_12.0.4_PUBLIC
+bash ghidra/scripts/run_analysis.sh /path/to/roms/ ~/ghidra_projects/
+```
+
+The script will:
+1. Verify Ghidra installation and `analyzeHeadless` is accessible
+2. Install `tmp68301.cspec` and `68000.ldefs` to the Ghidra language directory
+3. Import + analyze all three ROMs into one project (`DMP9-16`)
+4. Run annotation scripts: TMP68301_Setup → DMP9_Board_Setup → DMP9_FuncFixup → DMP9_LibMatch
+5. Print a pass/fail summary with per-ROM timing
+
+Logs land in `ghidra/logs/headless_<LABEL>.log`.
+
+## Re-running scripts only (skip re-import)
+
+If you've already imported the ROMs and just want to re-run the annotation scripts:
+
+```bash
+DMP9_MODE=rerun bash ghidra/scripts/run_analysis.sh /path/to/roms/ ~/ghidra_projects/
+```
+
+## One-shot: single ROM manual command
+
+```bash
+GHIDRA=$GHIDRAHOME
+SCRIPTS=$PWD/ghidra/scripts
+ROMS=/path/to/roms
+PROJECTS=~/ghidra_projects
 
 $GHIDRA/support/analyzeHeadless \
     $PROJECTS DMP9-16 \
@@ -26,104 +51,105 @@ $GHIDRA/support/analyzeHeadless \
     -loader-baseAddr 0x0 \
     -loader-blockName ROM \
     -loader-length 0x80000 \
-    -analysisTimeoutPerFile 600 \
-    -postScript DMP9_HeadlessSetup.java \
+    -analysisTimeoutPerFile 900 \
+    -overwrite \
+    -preScript DMP9_AnalysisOptions.java \
+    -postScript TMP68301_Setup.java \
+    -postScript DMP9_Board_Setup.java \
+    -postScript DMP9_FuncFixup.java \
+    -postScript DMP9_LibMatch.java \
     -scriptPath "$SCRIPTS"
-```
-
-## All three ROMs in one project
-
-```sh
-for ROM in XN349E0 XN349F0 XN349G0; do
-    BIN=$(ls "$ROMS/"*${ROM}*.bin)
-    $GHIDRA/support/analyzeHeadless \
-        $PROJECTS DMP9-16 \
-        -import "$BIN" \
-        -processor 68000 \
-        -cspec tmp68301 \
-        -loader BinaryLoader \
-        -loader-baseAddr 0x0 \
-        -loader-blockName ROM \
-        -loader-length 0x80000 \
-        -analysisTimeoutPerFile 600 \
-        -postScript DMP9_HeadlessSetup.java \
-        -scriptPath "$SCRIPTS"
-done
 ```
 
 ## Export decompiler output for a function range
 
-After headless import, re-open the project in the Ghidra GUI and use:
+After headless import, either:
 
-```
-Tools → Decompiler → Export → C/C++ Headers
-```
+A) Open the project in the Ghidra GUI:
+   - File → Open Project → select `~/ghidra_projects/DMP9-16.gpr`
+   - Navigate to function, open Decompiler window
 
-Or run a custom export script headlessly:
+B) Re-run headlessly with an export script:
 
-```sh
+```bash
 $GHIDRA/support/analyzeHeadless \
     $PROJECTS DMP9-16 \
-    -process "XN349G0-v1.11-10.03.1994.bin" \
+    -process "TMS27C240-10-DMP9-16-XN349G0-v1.11-10.03.1994.bin" \
     -noanalysis \
     -postScript DMP9_ExportDecompiled.java \
     -scriptPath "$SCRIPTS"
 ```
 
-(See `DMP9_ExportDecompiled.java` — to be written once function boundaries
+(`DMP9_ExportDecompiled.java` is planned — to be written once function boundaries
 are stable from the first analysis pass.)
 
-## Loader notes
+## Memory blocks created by scripts
 
-`BinaryLoader` imports raw binary with no file-format parsing.
-Critical options:
-- `-loader-baseAddr 0x0` — ROM is mapped at physical address 0
-- `-loader-length 0x80000` — 512 KB (0x80000 hex)
-- `-loader-blockName ROM` — names the memory block "ROM"
+`DMP9_Board_Setup.java` creates these blocks automatically if absent:
 
-The loader does NOT create a RAM block automatically.
-After import, add memory blocks manually (or via `DMP9_Board_Setup.java`):
-
-| Block | Start | Length | Type |
-|-------|-------|--------|------|
-| ROM   | 0x000000 | 512K  | R-X  |
-| DRAM  | 0x400000 | 64K   | RWX  |
-| TMP68301 | 0xFFFC00 | 0x400 | RW |
-| DSP_EF1  | 0x460000 | 0x1000 | RW |
-| DSP_EF2  | 0x470000 | 0x1000 | RW |
-| LCD  | 0x490000 | 2 | RW |
-
-`DMP9_Board_Setup.java` creates DRAM, TMP68301, DSP, and LCD blocks
-automatically if they don't already exist.
+| Block | Start | Length | Permissions |
+|-------|-------|--------|-------------|
+| ROM   | 0x000000 | 512 KB (0x80000) | R-X |
+| DRAM  | 0x400000 | 64 KB (0x10000)  | RWX |
+| DSP_EF1 | 0x460000 | 4 KB (0x1000) | RW |
+| DSP_EF2 | 0x470000 | 4 KB (0x1000) | RW |
+| LCD   | 0x490000 | 2 B              | RW |
+| TMP68301_SFR | 0xFFFC00 | 1 KB (0x400) | RW |
 
 ## Key analyzeHeadless flags
 
 | Flag | Purpose |
 |------|---------|
 | `-processor 68000` | Select 68000 instruction set |
-| `-cspec tmp68301` | Use custom calling convention spec |
-| `-noanalysis` | Skip auto-analysis (use for re-running scripts only) |
+| `-cspec tmp68301` | Use custom calling convention spec (3 conventions) |
+| `-loader BinaryLoader` | Raw binary, no file-format parsing |
+| `-loader-baseAddr 0x0` | ROM mapped at physical address 0 |
+| `-loader-length 0x80000` | 512 KB |
+| `-loader-blockName ROM` | Names the memory block "ROM" |
 | `-analysisTimeoutPerFile N` | Seconds before giving up on auto-analysis |
-| `-postScript <name>` | Script to run after analysis |
-| `-prescript <name>` | Script to run before analysis (e.g. to set options) |
+| `-overwrite` | Overwrite existing program in project |
+| `-preScript <name>` | Script to run before analysis (sets options) |
+| `-postScript <name>` | Script to run after analysis (annotation) |
+| `-noanalysis` | Skip auto-analysis (use to re-run scripts only) |
+| `-process <name>` | Re-process already-imported binary |
 | `-scriptPath <dir>` | Where to find scripts |
-| `-process <name>` | Re-process already-imported binary (skip re-import) |
-| `-readOnly` | Open existing project without modifying |
+| `-log <file>` | Write log to file |
 
 ## Stability notes
 
-Auto-analysis on a raw 68000 ROM needs these analyser settings for best results.
-Set via a `-preScript` that calls `setAnalysisOption()`:
+Auto-analysis on a raw 68000 ROM benefits from these settings (applied by
+`DMP9_AnalysisOptions.java` pre-script):
 
 ```java
-// In a preScript:
 setAnalysisOption(currentProgram, "Disassemble Entry Points", "true");
-setAnalysisOption(currentProgram, "Create Address Tables", "true");
+setAnalysisOption(currentProgram, "Create Address Tables",    "true");
+setAnalysisOption(currentProgram, "Decompiler Parameter ID", "true");
+setAnalysisOption(currentProgram, "Stack",                   "true");
 setAnalysisOption(currentProgram, "ARM Aggressive Instruction Finder", "false");
-// Increase recursion depth for 68k function boundary detection:
-setAnalysisOption(currentProgram, "Stack", "true");
 ```
 
-The most important manual step: after auto-analysis, run `DMP9_FuncFixup.java`
-to fix calling conventions — auto-analysis defaults everything to the first
-compiler spec, which misidentifies `yamaha_reg` functions as `__stdcall`.
+The most important manual step after auto-analysis: run `DMP9_FuncFixup.java` to
+fix calling conventions. Auto-analysis defaults everything to the first compiler spec,
+misidentifying `yamaha_reg` functions as `__stdcall`.
+
+## Troubleshooting
+
+**"analyzeHeadless: command not found"**
+→ Check `$GHIDRAHOME/support/analyzeHeadless` exists and is executable.
+→ Do not use a snap Ghidra install — snap restrictions prevent headless mode.
+
+**"Language tmp68301 not found"**
+→ Copy `ghidra/lang/tmp68301.cspec` and `ghidra/lang/68000.ldefs` to
+  `$GHIDRAHOME/Ghidra/Processors/68000/data/languages/`
+
+**"Script not found: DMP9_Board_Setup"**
+→ Ensure `-scriptPath` points to the `ghidra/scripts/` directory in this repo.
+
+**Analysis times out after `N` seconds**
+→ Increase `-analysisTimeoutPerFile`. 900 s (15 min) is usually sufficient.
+→ On slow machines, try 1800 s.
+
+**DMP9_FuncFixup overwrites ISR calling conventions**
+→ Pass 3 of FuncFixup protects ISR entries. If this still happens, check that
+  `DMP9_Board_Setup.java` ran first (it populates the vector table labels that
+  FuncFixup uses to build its protected set).

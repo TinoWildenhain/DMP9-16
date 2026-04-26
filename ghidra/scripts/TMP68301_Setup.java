@@ -497,22 +497,34 @@ public class TMP68301_Setup extends GhidraScript {
     // =========================================================================
 
     /**
+     * Apply a data type at an address, clearing any existing code units that
+     * overlap the type's footprint.  This is what makes the listing show the
+     * register as "word IMR = ??" rather than two raw "?? ??" bytes — without
+     * a data type, Ghidra has no width for the SFR location.
+     */
+    private void applyData(Address addr, DataType dt) {
+        Listing listing = currentProgram.getListing();
+        try {
+            int len = dt.getLength();
+            if (len <= 0) len = 1;
+            // Clear anything that already lives in this byte range so createData
+            // does not collide with a previous (wrong-width) definition.
+            listing.clearCodeUnits(addr, addr.add(len - 1), false);
+            listing.createData(addr, dt);
+        } catch (Exception e) {
+            println("  WARN: could not apply data type at " + addr
+                    + " (" + e.getMessage() + ")");
+        }
+    }
+
+    /**
      * Define a labelled register: clears existing code units, applies a data type,
      * sets a symbol, and adds plate + EOL comments.
      */
     private void defineReg(Address a, DataType dt, String name,
                            String plateComment, String eolComment) throws Exception {
-        // Clear any existing code units at this address
-        Listing listing = currentProgram.getListing();
-        listing.clearCodeUnits(a, a.add(dt.getLength() - 1), false);
-
-        // Apply data type
-        try {
-            listing.createData(a, dt);
-        } catch (Exception e) {
-            // If data creation fails (e.g. not in a mapped region), skip silently
-            println("  WARN: could not apply data type at " + a + " (" + e.getMessage() + ")");
-        }
+        // Apply the data type (clears overlapping code units first)
+        applyData(a, dt);
 
         // Create symbol
         SymbolTable st = currentProgram.getSymbolTable();

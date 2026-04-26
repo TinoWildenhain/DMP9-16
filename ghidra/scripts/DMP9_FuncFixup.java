@@ -294,6 +294,20 @@ public class DMP9_FuncFixup extends GhidraScript {
             }
 
             // ------------------------------------------------------------------
+            // PASS 1c: Name ISR stub functions (and direct ISRs) from vector slots
+            // ------------------------------------------------------------------
+            // Each vector slot at offset (vecNum * 4) holds a 32-bit pointer.
+            // If the pointer lands in 0x400-0x9FF, it's a small panic/dispatch
+            // stub — name it "stub_<slot_name>".  Otherwise the pointer goes
+            // straight to a real ISR body — name it "<slot_name>".
+            // Names are taken from the canonical 68000 + TMP68301 MFP table.
+            try {
+                nameStubFunctions();
+            } catch (Exception e) {
+                println("[DMP9_FuncFixup] Pass 1c WARNING: " + e.getMessage());
+            }
+
+            // ------------------------------------------------------------------
             // PASS 2: All other functions — heuristic prologue scan.
             // Skip anything already tagged in Pass 1 (vector entries / ISRs).
             // ------------------------------------------------------------------
@@ -355,6 +369,140 @@ public class DMP9_FuncFixup extends GhidraScript {
         } catch (InvalidInputException e) {
             // Convention not in cspec — leave as-is
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Vector slot name table (68000 standard + TMP68301 MFP user vectors).
+    // Built lazily because Ghidra scripts run as instances and static field
+    // initialisation has had quirks across versions.
+    // -----------------------------------------------------------------------
+    private String[] buildVectorNames() {
+        String[] n = new String[256];
+        n[2]  = "bus_error";
+        n[3]  = "address_error";
+        n[4]  = "illegal_insn";
+        n[5]  = "zero_divide";
+        n[6]  = "chk_insn";
+        n[7]  = "trapv_insn";
+        n[8]  = "privilege_violation";
+        n[9]  = "trace";
+        n[10] = "line_a_emulator";
+        n[11] = "line_f_emulator";
+        n[24] = "spurious_irq";
+        n[25] = "autovector_l1";
+        n[26] = "autovector_l2";
+        n[27] = "autovector_l3";
+        n[28] = "autovector_l4";
+        n[29] = "autovector_l5";
+        n[30] = "autovector_l6";
+        n[31] = "autovector_l7";
+        for (int i = 32; i <= 47; i++) n[i] = "trap_" + (i - 32);
+        n[64] = "mfp_vec64";
+        n[65] = "mfp_vec65";
+        n[66] = "mfp_vec66";
+        n[67] = "mfp_vec67";
+        n[68] = "mfp_vec68";
+        n[69] = "timer_housekeeping_isr";
+        n[70] = "mfp_vec70";
+        n[71] = "mfp_vec71";
+        n[72] = "serial0_status_isr";
+        n[73] = "serial0_rx_isr";
+        n[74] = "serial0_tx_isr";
+        n[75] = "serial0_special_isr";
+        n[76] = "serial1_status_isr";
+        n[77] = "serial1_rx_isr";
+        n[78] = "serial1_tx_isr";
+        n[79] = "serial1_special_isr";
+        return n;
+    }
+
+    // -----------------------------------------------------------------------
+    // Pass 1c: name ISR stub functions (or direct ISRs) from each vector slot.
+    //
+    //   pointer in [0x400, 0x9FF]  -> stub_<slot_name>
+    //   pointer elsewhere          -> <slot_name> (real ISR body)
+    //
+    // Skips slots without a canonical name (NULL entries in VEC_NAME) and
+    // never overwrites a function that already has a non-auto name.
+    // -----------------------------------------------------------------------
+    private void nameStubFunctions() throws Exception {
+        Memory          mem = currentProgram.getMemory();
+        FunctionManager fm  = currentProgram.getFunctionManager();
+        AddressFactory  af  = currentProgram.getAddressFactory();
+
+        String[] vecName = buildVectorNames();
+
+        println("[DMP9_FuncFixup] Pass 1c: naming stub / ISR functions from vector table...");
+
+        int named = 0;
+
+        for (int vecNum = 2; vecNum < 256; vecNum++) {
+            String slotName = vecName[vecNum];
+            if (slotName == null) continue;
+
+            long slotOffset = vecNum * 4L;
+            Address slotAddr = af.getDefaultAddressSpace().getAddress(slotOffset);
+            if (!mem.contains(slotAddr)) continue;
+
+            long targetOffset;
+            try {
+                targetOffset = mem.getInt(slotAddr) & 0xFFFFFFFFL;
+            } catch (Exception e) {
+                continue;
+            }
+            if (targetOffset == 0L || targetOffset == 0xFFFFFFFFL) continue;
+
+            Address targetAddr = af.getDefaultAddressSpace().getAddress(targetOffset);
+            if (!mem.contains(targetAddr)) continue;
+
+            boolean isStub = (targetOffset >= 0x400L && targetOffset <= 0x9FFL);
+            String funcName = isStub ? ("stub_" + slotName) : slotName;
+
+            Function existing = fm.getFunctionAt(targetAddr);
+            if (existing == null) {
+                // Make sure the bytes are disassembled before creating a function.
+                try {
+                    disassemble(targetAddr);
+                } catch (Exception ignore) { }
+                try {
+                    existing = createFunction(targetAddr, funcName);
+                } catch (Exception e) {
+                    println("  vec" + vecNum + ": could not create function at 0x"
+                            + Long.toHexString(targetOffset) + " (" + e.getMessage() + ")");
+                    continue;
+                }
+                if (existing == null) continue;
+            } else {
+                String curName = existing.getName();
+                // Only rename auto-generated names — preserve any human/script-set name.
+                if (curName != null
+                        && (curName.startsWith("FUN_")
+                            || curName.startsWith("stub_")
+                            || curName.startsWith("LAB_")
+                            || curName.startsWith("SUB_"))) {
+                    try {
+                        existing.setName(funcName, SourceType.ANALYSIS);
+                    } catch (InvalidInputException e) {
+                        // name collision — try adding a suffix
+                        try {
+                            existing.setName(funcName + "_v" + vecNum, SourceType.ANALYSIS);
+                        } catch (InvalidInputException e2) {
+                            continue;
+                        }
+                    }
+                } else {
+                    // Already named explicitly — leave it alone.
+                    continue;
+                }
+            }
+
+            named++;
+            println("  vec" + vecNum + " -> " + existing.getName()
+                    + " @ 0x" + Long.toHexString(targetOffset)
+                    + (isStub ? "  (stub)" : "  (direct ISR)"));
+        }
+
+        println("[DMP9_FuncFixup]   named " + named + " stub / ISR functions.");
     }
 
     // -----------------------------------------------------------------------

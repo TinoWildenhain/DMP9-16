@@ -85,6 +85,32 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         V111_ANCHORS.put("memcpy_bitser",      0x0000241EL); // bit-serial: ROXR.B #1,D1 ; ROXL.B #1,D2 ×8 per byte
         V111_ANCHORS.put("bitrev_byte",        0x00002464L); // single-byte bit reversal helper
         V111_ANCHORS.put("memcpy_bitser_w",    0x00002488L); // word bit-serial variant
+        V111_ANCHORS.put("memset_b",            0x000024DAL); // byte fill: MOVE.B D0,(A1)+ ; SUBQ.W #1,D1 ; BNE
+        V111_ANCHORS.put("memset_w",            0x000024F2L); // word fill variant
+        V111_ANCHORS.put("memset_l",            0x0000250AL); // longword fill variant
+
+        // Init-block helpers (0x274A cluster — confirmed all 3 ROMs)
+        V111_ANCHORS.put("delay_nested",        0x0000274AL); // void(u_int16_t loops) — nested delay
+        V111_ANCHORS.put("delay_simple",        0x00002768L); // void(u_int32_t count) — simple spin delay
+        V111_ANCHORS.put("write_4D0000",        0x00002770L); // void(u_int16_t val) — writes to 0x004D0000
+
+        // Serial/UART ISRs (identical addresses in all 3 ROMs — init section, never relocated)
+        V111_ANCHORS.put("timer_housekeeping_isr", 0x000006F0L); // vec69 — multi-rate scheduler (base+/5 tick)
+        V111_ANCHORS.put("serial0_status_isr",    0x000007AEL); // vec72 — SIO0 4-bit cause decode
+        V111_ANCHORS.put("serial0_rx_isr",        0x000007ECL); // vec73 — SIO0 ring-buffer Rx (MIDI Rx)
+        V111_ANCHORS.put("serial0_tx_isr",        0x00000836L); // vec74 — SIO0 ring-buffer Tx
+        V111_ANCHORS.put("serial0_special_isr",   0x0000088AL); // vec75 — SIO0 error/special
+        V111_ANCHORS.put("serial1_status_isr",    0x000008B4L); // vec76 — SIO1 cause decode
+        V111_ANCHORS.put("serial1_rx_isr",        0x000008F2L); // vec77 — SIO1 ring-buffer Rx
+        V111_ANCHORS.put("serial1_tx_isr",        0x0000093CL); // vec78 — SIO1 ring-buffer Tx
+        V111_ANCHORS.put("serial1_special_isr",   0x00000990L); // vec79 — SIO1 error/special
+
+        // Parallel/GPIO IRQ handlers (shifted in v1.10/v1.11 relative to v1.02)
+        V111_ANCHORS.put("parallel_irq_handler_1", 0x0000F0EAL); // v1.11 (was 0xECC8 in v1.02)
+        V111_ANCHORS.put("parallel_irq_handler_0", 0x0000F121L); // v1.11 (was 0xECFF in v1.02)
+
+        // Periodic scheduler callback (called from timer_housekeeping_isr every 5 ticks)
+        V111_ANCHORS.put("housekeeping_tick",    0x0000182AL); // identical in all 3 ROMs
 
         // LCD string/display cluster (identified from 401-call hot-path analysis)
         V111_ANCHORS.put("strlen",             0x00007AE2L); // 67 call sites

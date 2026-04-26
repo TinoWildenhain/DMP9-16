@@ -219,6 +219,9 @@ consistent with Microtec's register-argument ABI for small utility functions.
 | `0x00241E` | `0x0023FC` | `0x00241E` | `memcpy_bitser` | Bit-serial copy: `ROXR.B #1,D1` ; `ROXL.B #1,D2` ×8 per byte |
 | `0x002464` | `0x002442` | `0x002464` | `bitrev_byte` | Single-byte bit reversal helper |
 | `0x002488` | `0x002468` | `0x002488` | `memcpy_bitser_w` | Word bit-serial variant |
+| `0x0024DA` | `0x0024B8` | `0x0024DA` | `memset_b` | Byte fill: `MOVE.B D0,(A1)+` ; `SUBQ.W #1,D1` ; `BNE` |
+| `0x0024F2` | `0x0024D0` | `0x0024F2` | `memset_w` | Word fill variant |
+| `0x00250A` | `0x0024E8` | `0x00250A` | `memset_l` | Longword fill variant |
 
 The `meminv_b` and `memcpy_bitser` functions are used for DSP coefficient / delay-line
 DMA — the inversion and bit-serialisation patterns match the YM6007 DSP load protocol
@@ -263,6 +266,114 @@ All share the same LINK A6 / MOVEM.L prologue and reference LCD shadow-RAM table
 | `0x000128EC` | `midi_process_rx` | `void(...)` | MIDI message parsing core |
 | `0x00013454` | `scene_recall` | `void(int n)` | Recall scene memory n |
 | `0x00013186` | `scene_store` | `void(int n)` | Store scene memory n |
+
+### Serial / MIDI ISRs (init section — identical in all 3 ROMs)
+
+All ISR entry points live in the low init block and are hard-wired in the vector table.
+They are identical in v1.02, v1.10, and v1.11 — the init section is never relocated.
+Vector numbers are TMP68301 internal autovectors (68-series numbering).
+
+| Address | Vec# | Name | Notes |
+|---------|------|------|-------|
+| `0x000006F0` | 69 | `timer_housekeeping_isr` | Multi-rate scheduler: increments `sw_tick`, /5 modulo, decrements countdown timers, conditionally calls `housekeeping_tick` |
+| `0x000007AE` | 72 | `serial0_status_isr` | SIO0: reads 0xFFFD87, extracts 4-bit cause code → `sio0_flags`; sets `sio_event_src=1` |
+| `0x000007EC` | 73 | `serial0_rx_isr` | SIO0 MIDI Rx: ring-buffer byte from 0xFFFD89; overflow → bit4 of `sio0_flags` |
+| `0x00000836` | 74 | `serial0_tx_isr` | SIO0 Tx: feeds ring buffer to 0xFFFD89; disables Tx IRQ when empty |
+| `0x0000088A` | 75 | `serial0_special_isr` | SIO0: sets bit6 of `sio0_flags` (error/break) |
+| `0x000008B4` | 76 | `serial1_status_isr` | SIO1: same as 0x7AE but for 0xFFFD97 → `sio1_flags` |
+| `0x000008F2` | 77 | `serial1_rx_isr` | SIO1 Rx: ring-buffer byte from 0xFFFD99 |
+| `0x0000093C` | 78 | `serial1_tx_isr` | SIO1 Tx: feeds from Tx buffer to 0xFFFD99 |
+| `0x00000990` | 79 | `serial1_special_isr` | SIO1: sets bit6 of `sio1_flags` |
+
+Parallel/GPIO handlers (shifted in v1.10/v1.11):
+
+| Address (v1.11) | Address (v1.02) | Name | Notes |
+|-----------------|-----------------|------|-------|
+| `0x0000F0EA` | `0x0000ECC8` | `parallel_irq_handler_1` | GPIO parallel interrupt, handler 1 |
+| `0x0000F121` | `0x0000ECFF` | `parallel_irq_handler_0` | GPIO parallel interrupt, handler 0 |
+
+Scheduler callback (called every 5 timer ticks when `sw_status & 0x0800`):
+
+| Address | Name | Notes |
+|---------|------|-------|
+| `0x0000182A` | `housekeeping_tick` | High-level service routine: scans UI, issues DSP commands, etc. Identical in all 3 ROMs |
+
+### Init-block helpers (0x274A cluster)
+
+Short utility routines in the boot/init section, confirmed identical in all 3 ROMs.
+
+| Address (v1.11) | Address (v1.02) | Name | Signature | Notes |
+|-----------------|-----------------|------|-----------|-------|
+| `0x0000274A` | `0x00002728` | `delay_nested` | `void(u_int16_t loops)` | Nested busy-wait loop |
+| `0x00002768` | `0x00002746` | `delay_simple` | `void(u_int32_t count)` | Simple countdown spin delay |
+| `0x00002770` | `0x0000274E` | `write_4D0000` | `void(u_int16_t val)` | Writes to 0x004D0000 (unknown peripheral) |
+
+### Timer and serial configuration (v1.02, from init block 0x2588–0x27AE)
+
+Confirmed from disassembly of the init block; confirmed present in all 3 ROMs at same relative offset.
+
+**Timer channels (TMP68301 internal timers at 0x00FFFE0x):**
+
+| Channel | Base | TCR value | Period (counts) | Derived period @ 16 MHz | Use |
+|---------|------|-----------|-----------------|--------------------------|-----|
+| Timer0 | `0xFFFE00` | `0x10D2` | 1000 | 62.5 µs (16 kHz) | OS tick / ISR rate |
+| Timer1 | `0xFFFE20` | `0x20D2` | 6250 | 390.6 µs (~2.56 kHz) | UI / housekeeping |
+| Timer2 | `0xFFFE40` | `0x08D2` | 2 | Sync / watchdog pulse |
+
+**Serial channels (TMP68301 SIO at 0x00FFFFDxx):**
+
+| Channel | Regs (status/data/ctrl) | SSR | SDR | SPR | Rate | Use |
+|---------|------------------------|-----|-----|-----|------|-----|
+| SIO0 | 0xFFFD87 / 89 / 83 | 0xCC | 0x10 | 0x20 | **31 250 bps** | MIDI in/out |
+| SIO1 | 0xFFFD97 / 99 / 93 | 0xCC | 0x10 | 0x01 | (non-MIDI) | Panel/debug UART |
+| SIO2 | 0xFFFDA7 / A9 / A3 | 0xCC | 0x10 | 0x01 | (non-MIDI) | Aux UART |
+
+Baud rate derivation: `f_clk / (prescale × divider) = 16 MHz / 512 = 31 250 bps` for SIO0 (SPR=0x20 selects prescale×divider=512).
+
+### Serial ring buffers and ISR flag RAM (SHARED_DRAM)
+
+**SIO0 (MIDI) buffers:**
+
+| Address | Name | Size | Notes |
+|---------|------|------|-------|
+| `0x00407D9E` | `sio0_rx_buf_start` | 0x1004 B | Rx ring buffer start |
+| `0x00408DA2` | `sio0_rx_buf_end` | — | Rx ring buffer end |
+| `0x00408D9E` | `sio0_rx_wr_ptr` | 4 B | Current write pointer (ISR-maintained) |
+| `0x00408FB6` | `sio0_tx_buf_start` | 0x1000 B | Tx ring buffer start |
+| `0x00409FB6` | `sio0_tx_buf_end` | — | Tx ring buffer end |
+| `0x00409FBA` | `sio0_tx_rd_ptr` | 4 B | Current read pointer (Tx ISR) |
+| `0x0040ABE8` | `sio0_last_tx_byte` | 1 B | Last byte sent on SIO0 |
+
+**SIO1 buffers:**
+
+| Address | Name | Size | Notes |
+|---------|------|------|-------|
+| `0x00408DA6` | `sio1_rx_buf_start` | 0x0104 B | Rx ring buffer start |
+| `0x00408EAA` | `sio1_rx_buf_end` | — | |
+| `0x00408EA6` | `sio1_rx_wr_ptr` | 4 B | |
+| `0x00409FBE` | `sio1_tx_buf_start` | 0x0600 B | Tx ring buffer start |
+| `0x0040A5BE` | `sio1_tx_buf_end` | — | |
+| `0x0040A5C2` | `sio1_tx_rd_ptr` | 4 B | |
+| `0x0040ABE9` | `sio1_last_tx_byte` | 1 B | Last byte sent on SIO1 |
+
+**ISR flag bytes:**
+
+| Address | Name | Notes |
+|---------|------|-------|
+| `0x0040781E` | `sw_tick` | Free-running software tick counter (incremented every timer IRQ) |
+| `0x00407822` | `sw_tick_slow` | Slow tick counter (every 5 base ticks) |
+| `0x00407AAC` | `tick_mod2` | 2-state modulo counter (wraps at 2) |
+| `0x00407AAD` | `countdown_0` | Countdown timer 0 (decremented to zero) |
+| `0x00407AB1` | `countdown_1` | Countdown timer 1 |
+| `0x00407AB2` | `countdown_2` | Countdown timer 2 |
+| `0x00407AAA` | `tick_gate` | Gates increment of `tick_mod2` (non-zero = active) |
+| `0x00407AAB` | `tick_mod2_count` | Incremented when `tick_gate` non-zero |
+| `0x0040788C` | `sw_status` | Status word; bit 0x0800 triggers `housekeeping_tick` call from timer ISR |
+| `0x0040B681` | `sio0_flags` | SIO0 event/cause register: bits[3:0]=cause code, bit4=Rx overflow, bit6=special |
+| `0x0040B682` | `sio1_flags` | SIO1 event/cause register (same layout) |
+| `0x0040B684` | `sio_event_src` | Last event source: 1=SIO0, 2=SIO1 |
+| `0x0040B685` | `sio0_tx_busy` | Non-zero while SIO0 Tx ring buffer is active |
+| `0x0040B686` | `sio1_tx_busy` | Non-zero while SIO1 Tx ring buffer is active |
 
 ---
 
@@ -422,9 +533,10 @@ are all present — they are simply unused dead code in the embedded target buil
 | `meminv_b` | **Present** @ `0x0023FE` | MRI extension: invert-copy (`NOT.B` on each byte); used for DSP loading |
 | `memcpy_bitser` | **Present** @ `0x00241E` | Bit-serial copy (`ROXR/ROXL ×8`); used for YM6007 DSP DMA |
 | `bitrev_byte` | **Present** @ `0x002464` | Helper: reverse bit order in a single byte |
+| `memset_b/w/l` | **Present** @ `0x0024DA`/`F2`/`250A` | Byte/word/longword fill variants |
 | `strcpy` | **Not found** | Short strings copied with explicit loops; LCD is only 16 chars wide |
 | `strcmp` | **Not found** | Comparisons done with `CMPI` against string literals |
-| `memset` | **Not found as standalone** | Uses `MOVE.B D0,(A1)+` inline loops |
+| `memset` | see `memset_b/w/l` above | Present as typed variants in the MCC68K library block |
 | `zalloc` | **Not present** | No heap; firmware is fully stack/static |
 | `memclr` | **Not present** | Uses inline clear loops |
 | `itostr`/`itoa` | **Not present** | Yamaha wrote custom decimal formatter: `DIVU.W #10,D0` loop found at `0x008832`, `0x0088A8`, `0x00F44C`, `0x013DC6` |

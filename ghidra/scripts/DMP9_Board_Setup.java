@@ -171,6 +171,78 @@ public class DMP9_Board_Setup extends GhidraScript {
         labelRamVar(0x0040B8A3L, "lcd_state_flag2",
                 "LCD state flag 2 (paired with lcd_state_flag1).\n" +
                 "Both flags zero: allow all characters through to LCD hardware.");
+
+        // ---------------------------------------------------------------
+        // Timer ISR software tick counters
+        // ---------------------------------------------------------------
+        labelRamVar(0x0040781EL, "sw_tick",
+                "Free-running software tick counter.\n" +
+                "Incremented every timer_housekeeping_isr (Timer0/1 driven).\n" +
+                "Used with DIVUW #5 + SWAP to derive slower /5 tick rate.");
+        labelRamVar(0x00407822L, "sw_tick_slow",
+                "Slow software tick counter.\n" +
+                "Incremented every 5 base ticks (every 5th timer_housekeeping_isr call).");
+        labelRamVar(0x0040788CL, "sw_status",
+                "Software status word.\n" +
+                "Bit 0x0800: when set, calls housekeeping_tick() from the timer ISR\n" +
+                "(full MOVEM.L save/restore around the call).");
+        labelRamVar(0x00407AACL, "tick_mod2",
+                "2-state modulo counter (incremented each tick, wraps at 2).");
+        labelRamVar(0x00407AADL, "countdown_0",
+                "Software countdown timer 0 (decremented to zero each tick).");
+        labelRamVar(0x00407AB1L, "countdown_1",
+                "Software countdown timer 1.");
+        labelRamVar(0x00407AB2L, "countdown_2",
+                "Software countdown timer 2.");
+        labelRamVar(0x00407AAAL, "tick_gate",
+                "Gates tick_mod2 increment: non-zero enables tick_mod2_count to grow.");
+        labelRamVar(0x00407AABL, "tick_mod2_count",
+                "Incremented when tick_gate is non-zero.");
+
+        // ---------------------------------------------------------------
+        // SIO0 (MIDI) ISR flag bytes and ring buffers
+        // ---------------------------------------------------------------
+        labelRamVar(0x0040B681L, "sio0_flags",
+                "SIO0 (MIDI) event/cause register.\n" +
+                "bits[3:0] = 4-bit cause code read from 0xFFFD87 (shift right 3, mask 0x0F).\n" +
+                "bit4 = Rx ring buffer overflow.\n" +
+                "bit6 = special condition / error (set by serial0_special_isr).");
+        labelRamVar(0x0040B682L, "sio1_flags",
+                "SIO1 event/cause register (same layout as sio0_flags).");
+        labelRamVar(0x0040B684L, "sio_event_src",
+                "Last serial event source: 1=SIO0, 2=SIO1.\n" +
+                "Written by status-decode and Rx/special ISRs.");
+        labelRamVar(0x0040B685L, "sio0_tx_busy",
+                "Non-zero while SIO0 Tx ring buffer is draining (Tx ISR active).");
+        labelRamVar(0x0040B686L, "sio1_tx_busy",
+                "Non-zero while SIO1 Tx ring buffer is draining.");
+        labelRamVar(0x0040ABE8L, "sio0_last_tx_byte",
+                "Last byte written to SIO0 data register (0xFFFD89) by serial0_tx_isr.");
+        labelRamVar(0x0040ABE9L, "sio1_last_tx_byte",
+                "Last byte written to SIO1 data register (0xFFFD99) by serial1_tx_isr.");
+
+        // SIO0 ring buffers
+        labelRamVar(0x00407D9EL, "sio0_rx_buf_start",
+                "SIO0 Rx ring buffer start (0x1004 bytes, ~4 KB).\n" +
+                "Filled by serial0_rx_isr; drained by MIDI parser (midi_process_rx).");
+        labelRamVar(0x00408DA2L, "sio0_rx_buf_end",    "SIO0 Rx ring buffer end.");
+        labelRamVar(0x00408D9EL, "sio0_rx_wr_ptr",
+                "SIO0 Rx ring buffer write pointer (4-byte pointer, ISR-maintained).\n" +
+                "Points to next slot to write; wraps to sio0_rx_buf_start at sio0_rx_buf_end.");
+        labelRamVar(0x00408FB6L, "sio0_tx_buf_start",
+                "SIO0 Tx ring buffer start (0x1000 bytes, 4 KB).\n" +
+                "Filled by mainline MIDI send; drained by serial0_tx_isr.");
+        labelRamVar(0x00409FB6L, "sio0_tx_buf_end",    "SIO0 Tx ring buffer end.");
+        labelRamVar(0x00409FBAL, "sio0_tx_rd_ptr",
+                "SIO0 Tx ring buffer read pointer (4-byte pointer, Tx ISR-maintained).");
+
+        // SIO1 ring buffers
+        labelRamVar(0x00408DA6L, "sio1_rx_buf_start",  "SIO1 Rx ring buffer start (0x104 bytes).");
+        labelRamVar(0x00408EAAL, "sio1_rx_buf_end",    "SIO1 Rx ring buffer end.");
+        labelRamVar(0x00408EA6L, "sio1_rx_wr_ptr",     "SIO1 Rx ring buffer write pointer.");
+        labelRamVar(0x00409FBEL, "sio1_tx_buf_start",  "SIO1 Tx ring buffer start (0x600 bytes).");
+        labelRamVar(0x0040A5BEL, "sio1_tx_buf_end",    "SIO1 Tx ring buffer end.");
+        labelRamVar(0x0040A5C2L, "sio1_tx_rd_ptr",     "SIO1 Tx ring buffer read pointer.");
     }
 
     /** Create a label + plate comment at a RAM variable address in SHARED_DRAM. */

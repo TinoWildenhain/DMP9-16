@@ -49,6 +49,7 @@
 // @menupath
 // @toolbar
 
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
@@ -201,25 +202,56 @@ public class DMP9_MidiAnalysis extends GhidraScript {
     // -----------------------------------------------------------------------
     // Step 1: Anchor known MIDI functions by address or by name
     // -----------------------------------------------------------------------
+    //
+    // For each V111_ANCHORS entry:
+    //   1. Look for an existing function with this name (already labelled).
+    //   2. Look for an existing function at the known address.
+    //   3. If neither exists: disassemble the address and create the function.
+    // Step 3 is critical — auto-analysis misses small leaf routines in the
+    // 0x23xx–0x27xx init block because they have no vector-table entry.
 
     private Map<String, Function> anchorMidiFunctions(Listing listing) {
         Map<String, Function> found = new LinkedHashMap<>();
+        FunctionManager fm = currentProgram.getFunctionManager();
 
         for (Map.Entry<String, Long> entry : V111_ANCHORS.entrySet()) {
             String funcName = entry.getKey();
-            long   addr     = entry.getValue();
+            long   addrVal  = entry.getValue();
+            Address a = currentProgram.getAddressFactory()
+                            .getDefaultAddressSpace().getAddress(addrVal);
 
-            // First try: find by existing name
+            // 1. Find by existing name
             Function f = findFunctionByName(funcName, listing);
 
-            // Second try: find by address
+            // 2. Find by address
+            if (f == null) f = listing.getFunctionAt(a);
+
+            // 3. Disassemble + create if still missing
             if (f == null) {
-                Address a = currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(addr);
-                f = listing.getFunctionAt(a);
+                try {
+                    // Ensure the bytes are disassembled as code first
+                    if (!(listing.getCodeUnitAt(a) instanceof Instruction)) {
+                        DisassembleCommand cmd =
+                            new DisassembleCommand(new AddressSet(a), null, true);
+                        cmd.applyTo(currentProgram, monitor);
+                    }
+                    // Now create the function body
+                    f = fm.createFunction(funcName, a,
+                            new AddressSet(a), SourceType.USER_DEFINED);
+                    if (f != null)
+                        println("[DMP9_MidiAnalysis] Created: " + funcName
+                                + " @ 0x" + Long.toHexString(addrVal));
+                    else
+                        println("[DMP9_MidiAnalysis] Create failed: " + funcName
+                                + " @ 0x" + Long.toHexString(addrVal));
+                } catch (Exception e) {
+                    println("[DMP9_MidiAnalysis] Error creating " + funcName
+                            + " @ 0x" + Long.toHexString(addrVal) + ": " + e.getMessage());
+                }
             }
 
             if (f != null) {
-                // Ensure the name is set
+                // Ensure the name is set (overwrite FUN_xxx or entry)
                 if (f.getName().startsWith("FUN_") || f.getName().equals("entry")) {
                     try {
                         f.setName(funcName, SourceType.USER_DEFINED);
@@ -230,8 +262,8 @@ public class DMP9_MidiAnalysis extends GhidraScript {
                 found.put(funcName, f);
                 println("[DMP9_MidiAnalysis] Anchored: " + funcName + " @ " + f.getEntryPoint());
             } else {
-                println("[DMP9_MidiAnalysis] Not found: " + funcName
-                        + " (expected @ 0x" + Long.toHexString(addr) + " in v1.11)");
+                println("[DMP9_MidiAnalysis] MISSING: " + funcName
+                        + " (expected @ 0x" + Long.toHexString(addrVal) + " in v1.11)");
             }
         }
         return found;

@@ -146,6 +146,15 @@ misidentifying `yamaha_reg` functions as `__stdcall`.
 → Copy `ghidra/lang/tmp68301.cspec` and `ghidra/lang/68000.ldefs` to
   `$GHIDRAHOME/Ghidra/Processors/68000/data/languages/`
 
+**"tag name 'void' is not allowed. Possible tag names are: `<group>`,`<pentry>`,`<rule>`"**
+→ Your installed `tmp68301.cspec` has an older bug where the `__interrupt` prototype used
+  `<input><void/></input>` and `<output><void/></output>`. Ghidra 12.x does not allow
+  `<void/>` inside `<input>`/`<output>` — use empty self-closing elements instead:
+  `<input/>` and `<output/>`. The file in this repo is already corrected; reinstall it:
+  ```
+  cp ghidra/lang/tmp68301.cspec $GHIDRAHOME/Ghidra/Processors/68000/data/languages/
+  ```
+
 **"Script not found: DMP9_Board_Setup"**
 → Ensure `-scriptPath` points to the `ghidra/scripts/` directory in this repo.
 

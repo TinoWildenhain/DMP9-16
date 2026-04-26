@@ -161,8 +161,8 @@
        Mark as noreturn=false because RTE does return, just not via RTS.
        ═══════════════════════════════════════════════════════════════════ -->
   <prototype name="__interrupt" extrapop="0" stackshift="0">
-    <input><void/></input>
-    <output><void/></output>
+    <input/>
+    <output/>
     <unaffected>
       <register name="D0"/>
       <register name="D1"/>

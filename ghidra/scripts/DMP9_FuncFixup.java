@@ -106,11 +106,16 @@ public class DMP9_FuncFixup extends GhidraScript {
         // ------------------------------------------------------------------
         // Headers live in ghidra/include/ relative to the script directory.
         // We resolve the path from the script source file location.
-        File scriptFile = getSourceFile();
-        File includeDir = (scriptFile != null)
-            ? new File(scriptFile.getParentFile().getParentFile(), "include")
-            : new File(System.getProperty("user.home"),
-                       "devel/DMP9-16/ghidra/include");
+        File includeDir;
+        try {
+            generic.jar.ResourceFile rf = getSourceFile();
+            File scriptFile = (rf != null) ? rf.getFile(false) : null;
+            includeDir = (scriptFile != null)
+                ? new File(scriptFile.getParentFile().getParentFile(), "include")
+                : new File(System.getProperty("user.home"), "devel/DMP9-16/ghidra/include");
+        } catch (Exception e) {
+            includeDir = new File(System.getProperty("user.home"), "devel/DMP9-16/ghidra/include");
+        }
 
         String[] headerFiles = {
             new File(includeDir, "tmp68301_regs.h").getAbsolutePath(),

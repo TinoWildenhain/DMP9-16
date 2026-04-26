@@ -154,6 +154,52 @@
   </prototype>
 
   <!-- ═══════════════════════════════════════════════════════════════════
+       MCC68K LIBRARY calling convention — mcc68k_lib
+       Used by the MCC68K v4.x compiler runtime library helpers
+       (memcpy_b/w/l, meminv_b, memset_b/w/l, memcpy_bitser[_w], bitrev_byte).
+       Args:   all on stack (caller-cleaned, like __stdcall above)
+       Return: D0 (when present)
+       Differs from __stdcall in one critical respect: these routines push A1
+       on entry and pop it before RTS, so A1 is callee-saved (not killed).
+       D0 / A0 are still scratch.
+       ═══════════════════════════════════════════════════════════════════ -->
+  <prototype name="mcc68k_lib" extrapop="4" stackshift="4">
+    <input>
+      <pentry minsize="1" maxsize="500" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="4">
+        <register name="D0"/>
+      </pentry>
+      <pentry minsize="5" maxsize="8">
+        <addr space="join" piece1="D0" piece2="D1"/>
+      </pentry>
+    </output>
+    <unaffected>
+      <register name="D2"/>
+      <register name="D3"/>
+      <register name="D4"/>
+      <register name="D5"/>
+      <register name="D6"/>
+      <register name="D7"/>
+      <register name="A1"/>
+      <register name="A2"/>
+      <register name="A3"/>
+      <register name="A4"/>
+      <register name="A5"/>
+      <register name="A6"/>
+      <register name="SP"/>
+    </unaffected>
+    <killedbycall>
+      <register name="D0"/>
+      <register name="D1"/>
+      <register name="A0"/>
+    </killedbycall>
+  </prototype>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
        INTERRUPT calling convention
        Entered via the 68k exception vector table (hardware dispatch).
        No arguments.  No conventional return — terminates with RTE.

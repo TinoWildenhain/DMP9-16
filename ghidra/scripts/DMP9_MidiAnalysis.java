@@ -162,6 +162,11 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         Map<String, Function> namedFunctions = anchorMidiFunctions(listing);
 
         // -------------------------------------------------------------------
+        // Step 1b: Apply MCC68K library signatures (stack-based, A1 callee-saved)
+        // -------------------------------------------------------------------
+        applyLibrarySignatures(namedFunctions);
+
+        // -------------------------------------------------------------------
         // Step 2: Annotate SC0 UART register constants
         // -------------------------------------------------------------------
         annotateUartRegisters(listing);
@@ -340,6 +345,87 @@ public class DMP9_MidiAnalysis extends GhidraScript {
             if (f.getName().equals(name)) return f;
         }
         return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 1b: Apply typed signatures + mcc68k_lib calling convention to
+    // the MCC68K runtime library functions.  These routines use a stack-based,
+    // caller-cleaned convention with A1 callee-saved (the function pushes A1
+    // on entry and pops it before RTS).  Without this, Ghidra's default
+    // yamaha_reg analysis assigns bogus register parameters and the decompiler
+    // output for memcpy/memset/meminv calls is unreadable.
+    // -----------------------------------------------------------------------
+    private static final String CC_LIB = "mcc68k_lib";
+
+    private void applyLibrarySignatures(Map<String, Function> anchors) {
+        // void memcpy_b(byte *dst, byte *src, int count)
+        setLibrarySignature(anchors.get("memcpy_b"), "void",
+                new String[][]{{"byte*","dst"},{"byte*","src"},{"int","count"}});
+        // void memcpy_w(word *dst, word *src, int count)
+        setLibrarySignature(anchors.get("memcpy_w"), "void",
+                new String[][]{{"word*","dst"},{"word*","src"},{"int","count"}});
+        // void memcpy_l(dword *dst, dword *src, int count)
+        setLibrarySignature(anchors.get("memcpy_l"), "void",
+                new String[][]{{"dword*","dst"},{"dword*","src"},{"int","count"}});
+        // void meminv_b(byte *dst, byte *src, int count)
+        setLibrarySignature(anchors.get("meminv_b"), "void",
+                new String[][]{{"byte*","dst"},{"byte*","src"},{"int","count"}});
+        // void memset_b(byte *dst, int val, int count)
+        setLibrarySignature(anchors.get("memset_b"), "void",
+                new String[][]{{"byte*","dst"},{"int","val"},{"int","count"}});
+        // void memset_w(word *dst, int val, int count)
+        setLibrarySignature(anchors.get("memset_w"), "void",
+                new String[][]{{"word*","dst"},{"int","val"},{"int","count"}});
+        // void memset_l(dword *dst, int val, int count)
+        setLibrarySignature(anchors.get("memset_l"), "void",
+                new String[][]{{"dword*","dst"},{"int","val"},{"int","count"}});
+        // void memcpy_bitser(void *dst, void *src, int bit_count)
+        setLibrarySignature(anchors.get("memcpy_bitser"), "void",
+                new String[][]{{"void*","dst"},{"void*","src"},{"int","bit_count"}});
+        // byte bitrev_byte(int val)
+        setLibrarySignature(anchors.get("bitrev_byte"), "byte",
+                new String[][]{{"int","val"}});
+        // void memcpy_bitser_w(void *dst, void *src, int bit_count)
+        setLibrarySignature(anchors.get("memcpy_bitser_w"), "void",
+                new String[][]{{"void*","dst"},{"void*","src"},{"int","bit_count"}});
+    }
+
+    private void setLibrarySignature(Function fn, String retType, String[][] params) {
+        if (fn == null) return;
+        try {
+            DataType returnDT = libType(retType);
+            List<ParameterImpl> paramList = new ArrayList<>();
+            for (String[] p : params) {
+                paramList.add(new ParameterImpl(p[1], libType(p[0]), currentProgram));
+            }
+            fn.updateFunction(
+                    CC_LIB,
+                    new ReturnParameterImpl(returnDT, currentProgram),
+                    paramList,
+                    FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                    true,
+                    SourceType.ANALYSIS);
+            println("[DMP9_MidiAnalysis] Library signature set: " + fn.getName()
+                    + " (" + CC_LIB + ")");
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set signature for "
+                    + fn.getName() + ": " + e.getMessage());
+        }
+    }
+
+    private DataType libType(String name) {
+        switch (name) {
+            case "void":   return VoidDataType.dataType;
+            case "byte":   return ByteDataType.dataType;
+            case "byte*":  return new PointerDataType(ByteDataType.dataType);
+            case "word":   return WordDataType.dataType;
+            case "word*":  return new PointerDataType(WordDataType.dataType);
+            case "dword":  return DWordDataType.dataType;
+            case "dword*": return new PointerDataType(DWordDataType.dataType);
+            case "void*":  return new PointerDataType(VoidDataType.dataType);
+            case "int":    return DWordDataType.dataType;
+            default:       return DWordDataType.dataType;
+        }
     }
 
     // -----------------------------------------------------------------------

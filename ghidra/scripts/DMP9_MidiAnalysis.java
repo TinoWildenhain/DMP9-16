@@ -77,6 +77,17 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         V111_ANCHORS.put("lcd_write_cmd",      0x0000238CL);
         V111_ANCHORS.put("lcd_write_data",     0x000023DCL);
         V111_ANCHORS.put("uart_write",         0x00002AA6L);
+        // LCD string/display cluster (identified from 401-call hot-path analysis)
+        V111_ANCHORS.put("strlen",             0x00007AE2L); // 67 call sites
+        V111_ANCHORS.put("lcd_write_str",      0x000078D4L); // 401 calls — writes null-term str at col, tracks state
+        V111_ANCHORS.put("lcd_write_str_row",  0x0000793AL); // 124 calls — variant with extra row param
+        V111_ANCHORS.put("lcd_str_padded_r",   0x000079A8L); // 57 calls — right-pad to field width
+        V111_ANCHORS.put("lcd_str_padded_l",   0x00007A06L); // 122 calls — left-pad variant
+        V111_ANCHORS.put("lcd_str_width",      0x00007A74L); // 5 calls  — width-limited string write
+        V111_ANCHORS.put("lcd_format_num",     0x00007B4EL); // 141 calls — formatted number to LCD
+        V111_ANCHORS.put("lcd_format_str",     0x00007BA6L); // 7 calls  — formatted string display
+        V111_ANCHORS.put("lcd_write_padded",   0x0000A09CL); // uses strlen, computes padding
+        V111_ANCHORS.put("print_rjust16",      0x0000A6A8L); // 16-char right-justified UART output
     }
 
     /** MIDI status byte constants */

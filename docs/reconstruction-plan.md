@@ -185,18 +185,54 @@ This maps to the ISR stubs at `0x000400–0x0007FF`.
 
 ## Confirmed Functions (v1.11)
 
+### Low-level I/O (hardware drivers)
+
 | Address | Name | Signature | Notes |
 |---------|------|-----------|-------|
 | `0x0003BF4E` | `reset_handler` | `void() yamaha_reg noreturn` | Entry point (via JMP at 0x000400) |
 | `0x0000A5A4` | `report_bus_error` | `void() __stdcall` | Prints "Bus Error" via UART |
 | `0x0000A5B8` | `report_address_error` | `void() __stdcall` | |
-| `0x0000A6A8` | `print_rjust16` | `void(char *s) __stdcall` | 16-char right-justified UART output |
-| `0x00002AA6` | `uart_write` | `void(char *str, int len) __stdcall` | Raw UART TX |
-| `0x0000238C` | `lcd_write_cmd` | `void(uint8_t cmd)` | HD44780 instruction write |
-| `0x000023DC` | `lcd_write_data` | `void(uint8_t data)` | HD44780 data byte write |
-| `0x0000274E` | `dsp_ef1_write` | `void(...)` | Write EF1 DSP register |
-| `0x00002904` | `dsp_ef2_write` | `void(...)` | Write EF2 DSP register |
-| `0x000122E0` | `midi_tx_byte` | `void(uint8_t b) __stdcall` | SC0 UART transmit |
+| `0x00002AA6` | `uart_write` | `void(char *str, int len) __stdcall` | Raw UART TX (SC0) |
+| `0x0000238C` | `lcd_write_cmd` | `void(uint8_t cmd)` | HD44780 instruction write to 0x490000 |
+| `0x000023DC` | `lcd_write_data` | `void(uint8_t data)` | HD44780 data byte write to 0x490001 |
+| `0x0000274E` | `dsp_ef1_write` | `void(...)` | Write EF1 DSP register (0x460000) |
+| `0x00002904` | `dsp_ef2_write` | `void(...)` | Write EF2 DSP register (0x470000) |
+| `0x000122E0` | `midi_tx_byte` | `void(uint8_t b) __stdcall` | SC0 UART transmit (MIDI out) |
+
+### LCD string/display subsystem (hot cluster at 0x007800–0x007C00)
+
+Identified by call-count analysis: the cluster at 0x007800–0x007C00 contains the
+most-called functions in the firmware (401 / 141 / 124 / 122 / 57 call sites).
+All share the same LINK A6 / MOVEM.L prologue and reference LCD shadow-RAM tables.
+
+| Address | Name | Calls | Notes |
+|---------|------|-------|-------|
+| `0x000078D4` | `lcd_write_str` | 401 | Writes null-terminated string at column; checks `lcd_state_flag1/2` |
+| `0x0000793A` | `lcd_write_str_row` | 124 | Variant with extra row parameter (row+col addressing) |
+| `0x000079A8` | `lcd_str_padded_r` | 57 | Right-padded string to fixed field width |
+| `0x00007A06` | `lcd_str_padded_l` | 122 | Left-padded string variant |
+| `0x00007A74` | `lcd_str_width` | 5 | Width-limited string write |
+| `0x00007AE2` | `strlen` | 67 | MCC68K `strlen` — tight `TST.B (A0)+ ; BNE` loop |
+| `0x00007B4E` | `lcd_format_num` | 141 | Formatted decimal/hex number → LCD |
+| `0x00007BA6` | `lcd_format_str` | 7 | Formatted string display variant |
+| `0x0000A09C` | `lcd_write_padded` | — | Uses `strlen`, computes padding for alignment |
+| `0x0000A6A8` | `print_rjust16` | — | 16-char right-justified UART output |
+
+### LCD shadow RAM (confirmed addresses in SHARED_DRAM)
+
+| Address | Name | Notes |
+|---------|------|-------|
+| `0x00407982` | `lcd_col_table` | Column→DDRAM lookup, 64 bytes (4×16 LCD) |
+| `0x004079C2` | `lcd_col_table_2` | Second half of column table (+0x40 offset) |
+| `0x00407A02` | `lcd_shadow_buf` | LCD display shadow buffer, 64 bytes |
+| `0x0040B6EA` | `lcd_mode_flag` | If bit7 set: suppress character output |
+| `0x0040B8A2` | `lcd_state_flag1` | State flag 1 (busy/blink); non-zero blocks control chars |
+| `0x0040B8A3` | `lcd_state_flag2` | State flag 2 (paired with flag1) |
+
+### MIDI / scene (confirmed)
+
+| Address | Name | Signature | Notes |
+|---------|------|-----------|-------|
 | `0x000128EC` | `midi_process_rx` | `void(...)` | MIDI message parsing core |
 | `0x00013454` | `scene_recall` | `void(int n)` | Recall scene memory n |
 | `0x00013186` | `scene_store` | `void(int n)` | Store scene memory n |
@@ -328,6 +364,66 @@ Key LCD strings used to identify MIDI code blocks:
 `"Sure?"`, `"Memory RECALL"`
 
 ---
+
+
+## MCC68K Toolchain — Confirmed Headers
+
+Two original MCC68K header files from the Yamaha build environment have been recovered:
+
+| File | SCCS version | Date | Copyright |
+|------|-------------|------|-----------|
+| `MRIEXT.H` | 1.33 | Oct 30, 1992 | 1988–1991, 1992 |
+| `STRING.H` | 1.14 | Dec 21, 1992 | 1988–1991 |
+
+Both date from **late 1992**, approximately 13 months before the earliest ROM (v1.02, Nov 1993).
+This is consistent with Yamaha acquiring the standard MCC68K v4.1/4.2 package in 1992 and
+developing the DMP9 firmware over the following year.
+
+### What these headers tell us
+
+**No OEM variant.** The headers are structurally identical to the standard commercial
+MCC68K v4.x distribution. `stdaux`/`stdprn` (MS-DOS host streams), the `_FPU`/`_68040`
+dispatch macros in `eprintf`/`ftoa`, and the `NULLPTR`/`TRUE`/`FALSE` convenience macros
+are all present — they are simply unused dead code in the embedded target build.
+
+**Library functions actually used in the ROM:**
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `strlen` | **Present** @ `0x007AE2` | MCC68K `TST.B (A0)+ ; BNE` loop; 67 call sites |
+| `memcpy` | **Not found as standalone** | No `MOVE.x (A0)+,(A1)+` counted loop — inlined or not used |
+| `strcpy` | **Not found** | Short strings copied with explicit loops; LCD is only 16 chars wide |
+| `strcmp` | **Not found** | Comparisons done with `CMPI` against string literals |
+| `memset` | **Not found as standalone** | Uses `MOVE.B D0,(A1)+` inline loops |
+| `zalloc` | **Not present** | No heap; firmware is fully stack/static |
+| `memclr` | **Not present** | Uses inline clear loops |
+| `itostr`/`itoa` | **Not present** | Yamaha wrote custom decimal formatter: `DIVU.W #10,D0` loop found at `0x008832`, `0x0088A8`, `0x00F44C`, `0x013DC6` |
+| `ftoa`, `eprintf` | **Not applicable** | No FPU on TMP68301; `_FPU`/`_68040` macros never defined |
+| `strtok`, `strerror` | **Not applicable** | No OS, no `errno` |
+
+**`STRING.H` vs `MRIEXT.H` relationship:**
+- `string.h` v1.14 is the standard ANSI C `<string.h>` — defines `strlen`, `strcpy`, `memcpy`, etc.
+- `mriext.h` v1.33 extends the standard library with MRI-specific functions (`zalloc`, `memclr`,
+  `itostr`, `ftoa`) and convenience macros (`min`/`max`, `TRUE`/`FALSE`, `NULLPTR`)
+- The firmware uses only `strlen` from the standard library, and none of the MRI extensions —
+  consistent with a bare-metal build that links against `libmcc68k.a` minimally
+
+**Arithmetic profile (all 3 ROMs):**
+- 243 `DIVU.W` instructions in code (÷2: 38×, ÷10: 4×, ÷16: 2×, ÷56: 1×)
+- 486 `MULU.W` instructions — heavy fixed-point DSP coefficient arithmetic
+- 65 `DIVS.W` — signed division for parameter range mapping
+- No `DIVU.W #96` — CC count multiplication done via `MULU.W` in the other direction
+
+### Reconstruction implications
+
+The GCC flags in `compile.sh` already approximate the MCC68K output:
+```
+-m68000 -Os -mshort -funsigned-char -ffreestanding -fno-builtin -fno-common -nostdlib
+```
+Key points:
+- `-mshort` (`int` = 16-bit) is confirmed critical — `DIVU.W` (16-bit quotient) is used everywhere
+- The `strlen` implementation is a simple loop — GCC with `-Os` generates the same pattern
+- No `libmcc68k.a` link needed for the string functions actually used
 
 ## Source Tree Structure
 

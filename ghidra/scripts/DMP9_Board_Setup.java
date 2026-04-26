@@ -145,8 +145,45 @@ public class DMP9_Board_Setup extends GhidraScript {
                 "  boundary – 0x40FFFF  CPU stack and working variables\n" +
                 "Trace the first MOVE.L writes here to find the boundary.",
                 "IC35+IC36 Shared DRAM — CPU stack/RAM + DSP delay buffer");
+
+        // --- LCD display RAM variables (identified from code analysis of 0x0078D4 cluster) ---
+        // The hot LCD write function (0x0078D4, 401 call sites) references these addresses directly.
+        // Layout hypothesis: two 64-byte tables (4 rows × 16 cols = 64 cells each)
+        labelRamVar(0x00407982L, "lcd_col_table",
+                "LCD column-position lookup table (4×16 LCD = 64 entries)\n" +
+                "Written by lcd_write_str (0x0078D4) when char==0x10 (cursor position cmd).\n" +
+                "Maps display cell index to HD44780 DDRAM address.");
+        labelRamVar(0x004079C2L, "lcd_col_table_2",
+                "LCD column table second half (offset +0x40 from lcd_col_table).\n" +
+                "May be row-2/row-3 section or alternate display mode.");
+        labelRamVar(0x00407A02L, "lcd_shadow_buf",
+                "LCD shadow buffer — 64 bytes, mirrors the physical HD44780 DDRAM.\n" +
+                "Written by lcd_write_str (0x0078D4) on every character output.\n" +
+                "Allows the CPU to read back displayed content without querying the LCD.");
+        labelRamVar(0x0040B6EAL, "lcd_mode_flag",
+                "LCD mode/control flag.\n" +
+                "Checked by lcd_write_str: if negative (bit7 set), character output is suppressed.\n" +
+                "May control display-on/off, update pending, or blink state.");
+        labelRamVar(0x0040B8A2L, "lcd_state_flag1",
+                "LCD state flag 1 (busy/update state).\n" +
+                "Checked before writing chars < ASCII 0x30 (control characters).\n" +
+                "Non-zero: suppress output of control chars.");
+        labelRamVar(0x0040B8A3L, "lcd_state_flag2",
+                "LCD state flag 2 (paired with lcd_state_flag1).\n" +
+                "Both flags zero: allow all characters through to LCD hardware.");
     }
 
+    /** Create a label + plate comment at a RAM variable address in SHARED_DRAM. */
+    private void labelRamVar(long absAddr, String name, String comment) throws Exception {
+        Address a = absAddr(absAddr);
+        SymbolTable st = currentProgram.getSymbolTable();
+        Listing listing = currentProgram.getListing();
+        try { st.createLabel(a, name, SourceType.USER_DEFINED); }
+        catch (Exception e) { println("  WARN: could not label " + name + " @ " + a); }
+        if (comment != null && !comment.isEmpty()) {
+            listing.setComment(a, CommentType.PLATE, comment);
+        }
+    }
 
     // =========================================================================
     // DSP EF1 and EF2

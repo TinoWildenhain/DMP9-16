@@ -23,7 +23,7 @@ at their original locations.
 | DRAM | 64 KB (MSM511664-80, IC35/36) at 0x400000 — dual-use: CPU stack + DSP delay |
 | SRAM | M5M5256BFP-70LL (IC66–68, 93, 94) — 256K, DSP section |
 | TMP68301 regs | 0xFFFC00 (internal peripheral base) |
-| LCD | HD44780-compatible at 0x490000 (CMD) / 0x490001 (DATA) |
+| LCD | HD44780-compatible, 4×16 chars, at 0x490000 (CMD) / 0x490001 (DATA) |
 | DSP EF1 | YM3804+YM6007+YM3807+YM6104 at 0x460000 |
 | DSP EF2 | YM3804+YM3807 at 0x470000 |
 | Address decoding | **External logic PLDs** (PLD-TM1 / PLD-TM2) — not TMP68301 AMARO/AAMRO |

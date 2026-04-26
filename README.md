@@ -16,7 +16,7 @@ and release documentation.
 | Effects EF1 | YM3804 + YM6007 + YM3807 + YM6104 | IC19/29/46/70/71 + IC26–28/37–39 |
 | Effects EF2 | YM3804 + YM3807 | |
 | MIDI | TMP68301 integrated SC0 UART | 31250 baud, 8N1 |
-| LCD | HD44780-compatible character LCD | 0x490000 CMD / 0x490001 DATA |
+| LCD | HD44780-compatible character LCD, 4×16 | 0x490000 CMD / 0x490001 DATA |
 | Address decoding | PLD-TM1 (XA353A00) + PLD-TM2 (XA354A00) | External — not TMP68301 AMARO/AAMRO |
 
 ## Memory map

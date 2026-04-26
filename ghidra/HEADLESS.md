@@ -45,7 +45,7 @@ PROJECTS=~/ghidra_projects
 $GHIDRA/support/analyzeHeadless \
     $PROJECTS DMP9-16 \
     -import "$ROMS/TMS27C240-10-DMP9-16-XN349G0-v1.11-10.03.1994.bin" \
-    -processor 68000 \
+    -processor "68000:BE:32:default" \
     -cspec tmp68301 \
     -loader BinaryLoader \
     -loader-baseAddr 0x0 \
@@ -137,6 +137,10 @@ misidentifying `yamaha_reg` functions as `__stdcall`.
 **"analyzeHeadless: command not found"**
 → Check `$GHIDRAHOME/support/analyzeHeadless` exists and is executable.
 → Do not use a snap Ghidra install — snap restrictions prevent headless mode.
+
+**"Unsupported language: 68000"**
+→ The `-processor` flag requires the full language ID from the `.ldefs` file, not just
+  the processor name. Use `-processor "68000:BE:32:default"` (not `-processor 68000`).
 
 **"Language tmp68301 not found"**
 → Copy `ghidra/lang/tmp68301.cspec` and `ghidra/lang/68000.ldefs` to

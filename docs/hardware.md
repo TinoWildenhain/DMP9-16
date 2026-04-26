@@ -73,7 +73,7 @@ Inputs: A16–A19, AS, UDS, LDS, CS0, CS1, R/W from TMP68301 bus
 
 ## LCD: HD44780-compatible
 
-- Character LCD module (2-line, 40-character; exact size TBD from hardware)
+- Character LCD module, **4 lines × 16 characters** (confirmed from manual LCD screenshots)
 - Optimised for above-eye-level reading (rack-mounted unit viewed from above)
 - Instruction register: `0x490000` (write-only in firmware)
 - Data register: `0x490001` (read/write)

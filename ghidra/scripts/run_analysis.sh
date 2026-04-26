@@ -64,7 +64,8 @@ if [ ! -x "$ANALYZE_HEADLESS" ]; then
     exit 1
 fi
 
-GHIDRA_VERSION=$("$ANALYZE_HEADLESS" --version 2>/dev/null | head -1 || echo "unknown")
+# Read version from application.properties — analyzeHeadless has no --version flag
+GHIDRA_VERSION=$(grep -m1 'application.version=' "$GHIDRAHOME/Ghidra/application.properties" 2>/dev/null | cut -d= -f2 || echo "unknown")
 echo "Ghidra: $GHIDRAHOME"
 echo "Version: $GHIDRA_VERSION"
 
@@ -201,10 +202,12 @@ run_headless() {
     t_start=$(date +%s)
 
     # First pass: import + analyze + annotate
+    # Language ID must be the full string from the .ldefs file: processor:endian:size:variant
+    # cspec must match the compiler id in the .ldefs <compiler ... id="tmp68301"/> entry
     "$ANALYZE_HEADLESS" \
         "$PROJECTS_DIR" "$PROJECT_NAME" \
         -import "$rom_path" \
-        -processor 68000 \
+        -processor "68000:BE:32:default" \
         -cspec tmp68301 \
         -loader BinaryLoader \
         -loader-baseAddr 0x0 \

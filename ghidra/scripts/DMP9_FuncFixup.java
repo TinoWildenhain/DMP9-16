@@ -34,14 +34,18 @@
 // @menupath
 // @toolbar
 
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.script.GhidraScript;
+import ghidra.app.util.cparser.C.CParserUtils;
 import ghidra.program.model.address.*;
+import ghidra.program.model.data.*;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.mem.*;
 import ghidra.util.exception.InvalidInputException;
 
+import java.io.File;
 import java.util.*;
 
 public class DMP9_FuncFixup extends GhidraScript {
@@ -95,6 +99,69 @@ public class DMP9_FuncFixup extends GhidraScript {
         if (isrCC == null) {
             println("[DMP9_FuncFixup] WARNING: '" + CC_ISR + "' not found in cspec — " +
                     "ISR handlers will be tagged 'unknown'.");
+        }
+
+        // ------------------------------------------------------------------
+        // STEP 0: Parse C header files into the program's data type manager
+        // ------------------------------------------------------------------
+        // Headers live in ghidra/include/ relative to the script directory.
+        // We resolve the path from the script source file location.
+        File scriptFile = getSourceFile();
+        File includeDir = (scriptFile != null)
+            ? new File(scriptFile.getParentFile().getParentFile(), "include")
+            : new File(System.getProperty("user.home"),
+                       "devel/DMP9-16/ghidra/include");
+
+        String[] headerFiles = {
+            new File(includeDir, "tmp68301_regs.h").getAbsolutePath(),
+            new File(includeDir, "dmp9_board_regs.h").getAbsolutePath(),
+            new File(includeDir, "dmp9_types.h").getAbsolutePath(),
+        };
+
+        // Verify at least one header exists before attempting to parse
+        boolean anyHeaderFound = false;
+        for (String hf : headerFiles) {
+            if (new File(hf).exists()) { anyHeaderFound = true; break; }
+        }
+
+        if (anyHeaderFound) {
+            println("[DMP9_FuncFixup] Step 0: parsing C headers from " + includeDir);
+            try {
+                DataTypeManager dtm = currentProgram.getDataTypeManager();
+                String[] includePaths = { includeDir.getAbsolutePath() };
+                String[] parseArgs   = { "-D__GHIDRA__", "-D__68000__" };
+                CParserUtils.parseHeaderFiles(
+                    new DataTypeManager[]{ dtm },
+                    headerFiles, includePaths, parseArgs,
+                    dtm, monitor);
+                println("[DMP9_FuncFixup]   Headers parsed OK.");
+            } catch (Exception e) {
+                println("[DMP9_FuncFixup]   Header parse WARNING: " + e.getMessage()
+                        + " — continuing without header types.");
+            }
+        } else {
+            println("[DMP9_FuncFixup] Step 0: header dir not found at "
+                    + includeDir + " — skipping C header import.");
+        }
+
+        // ------------------------------------------------------------------
+        // STEP 0b: Force-disassemble the ISR stub block (0x400–0x9FF)
+        // ------------------------------------------------------------------
+        // The ISR stubs in this range are NOT reachable from the vector table
+        // in the first auto-analysis pass because the vector table entries
+        // point to individual ISR addresses — but the padding bytes between
+        // entries confuse the linear-sweep.  Force it here before Pass 1
+        // creates functions from vector targets.
+        {
+            println("[DMP9_FuncFixup] Step 0b: force-disassembling ISR stub block 0x400–0x9FF");
+            Address stubStart = currentProgram.getAddressFactory()
+                .getDefaultAddressSpace().getAddress(0x000400L);
+            Address stubEnd   = currentProgram.getAddressFactory()
+                .getDefaultAddressSpace().getAddress(0x000A00L);
+            AddressSet stubRange = new AddressSet(stubStart, stubEnd);
+            DisassembleCommand disCmd = new DisassembleCommand(stubRange, null, true);
+            disCmd.applyTo(currentProgram, monitor);
+            println("[DMP9_FuncFixup]   ISR stub block disassembled.");
         }
 
         int txId = currentProgram.startTransaction("DMP9 function calling convention fixup");
@@ -182,6 +249,33 @@ public class DMP9_FuncFixup extends GhidraScript {
                 vectorFunctions.add(func.getEntryPoint());
                 vectorFunctions.add(realFunc.getEntryPoint());
                 taggedEntry++;
+            }
+
+            // ------------------------------------------------------------------
+            // PASS 1b: Overlay vector table as Pointer32 array
+            // ------------------------------------------------------------------
+            // Apply a typed Pointer32[VECTOR_COUNT] array at 0x000000 so the
+            // Listing view shows each slot as a named function pointer rather
+            // than raw ?? bytes.  Also apply the M68K_VectorTable struct from
+            // the parsed dmp9_types.h if it is available in the DTM.
+            {
+                DataTypeManager dtm = currentProgram.getDataTypeManager();
+                Address vtBase = afac.getDefaultAddressSpace().getAddress(VECTOR_BASE);
+                try {
+                    listing.clearCodeUnits(vtBase, vtBase.add(VECTOR_COUNT * 4L - 1), false);
+
+                    // Prefer the named struct from headers; fall back to Pointer32 array
+                    DataType vtStruct = dtm.getDataType("/M68K_VectorTable");
+                    if (vtStruct == null)
+                        vtStruct = new ArrayDataType(new Pointer32DataType(), VECTOR_COUNT, 4);
+
+                    listing.createData(vtBase, vtStruct);
+                    println("[DMP9_FuncFixup] Pass 1b: vector table overlay applied (" 
+                            + vtStruct.getName() + ") at 0x000000.");
+                } catch (Exception e) {
+                    println("[DMP9_FuncFixup] Pass 1b WARNING: could not apply vector overlay: "
+                            + e.getMessage());
+                }
             }
 
             // ------------------------------------------------------------------

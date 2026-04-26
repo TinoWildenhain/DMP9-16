@@ -199,6 +199,33 @@ This maps to the ISR stubs at `0x000400–0x0007FF`.
 | `0x00002904` | `dsp_ef2_write` | `void(...)` | Write EF2 DSP register (0x470000) |
 | `0x000122E0` | `midi_tx_byte` | `void(uint8_t b) __stdcall` | SC0 UART transmit (MIDI out) |
 
+### MCC68K runtime library block (0x0023xx cluster)
+
+A contiguous block of Microtec MCC68K compiler runtime routines at 0x0023AE–0x0024C0,
+confirmed present at matching relative offsets in all three ROM versions.  These are
+identified by their characteristic byte patterns (ROXR/ROXL ×8, NOT.B invert loop,
+DBF copy loops) and by cross-referencing addresses from the old analysis session which
+correctly identified 0x23FC (bitser) and 0x243E (bitrev_byte) in v1.02.
+
+All functions use the `MOVE.L A1,-(SP)` register-save prologue (no LINK A6 frame) —
+consistent with Microtec's register-argument ABI for small utility functions.
+
+| Address (v1.11) | Address (v1.02) | Address (v1.10) | Name | Description |
+|-----------------|-----------------|-----------------|------|-------------|
+| `0x0023AE` | `0x00238C` | `0x0023AE` | `memcpy_b` | Byte copy: `MOVE.B (A0)+,(A1)+` ; `BTST #0,D0` ; `BNE` |
+| `0x0023CA` | `0x0023A8` | `0x0023CA` | `memcpy_w` | Word copy: `SUBQ.W #1,D0` ; `MOVE.W (A0)+,(A1)+` ; `DBF` |
+| `0x0023E4` | `0x0023C2` | `0x0023E4` | `memcpy_l` | Longword copy: `SUBQ.W #1,D0` ; `MOVE.L (A0)+,(A1)+` ; `DBF` |
+| `0x0023FE` | `0x0023DC` | `0x0023FE` | `meminv_b` | Invert-copy: `MOVE.B (A0)+,D1` ; `NOT.B D1` ; `MOVE.B D1,(A1)+` |
+| `0x00241E` | `0x0023FC` | `0x00241E` | `memcpy_bitser` | Bit-serial copy: `ROXR.B #1,D1` ; `ROXL.B #1,D2` ×8 per byte |
+| `0x002464` | `0x002442` | `0x002464` | `bitrev_byte` | Single-byte bit reversal helper |
+| `0x002488` | `0x002468` | `0x002488` | `memcpy_bitser_w` | Word bit-serial variant |
+
+The `meminv_b` and `memcpy_bitser` functions are used for DSP coefficient / delay-line
+DMA — the inversion and bit-serialisation patterns match the YM6007 DSP load protocol
+identified in the old analysis session.  `memcpy_b/w/l` are standard memory utilities;
+`bitrev_byte` is called by the bit-serial copiers to reverse bit order within each byte
+before transmitting to the DSP.
+
 ### LCD string/display subsystem (hot cluster at 0x007800–0x007C00)
 
 Identified by call-count analysis: the cluster at 0x007800–0x007C00 contains the
@@ -391,7 +418,10 @@ are all present — they are simply unused dead code in the embedded target buil
 | Function | Status | Notes |
 |----------|--------|-------|
 | `strlen` | **Present** @ `0x007AE2` | MCC68K `TST.B (A0)+ ; BNE` loop; 67 call sites |
-| `memcpy` | **Not found as standalone** | No `MOVE.x (A0)+,(A1)+` counted loop — inlined or not used |
+| `memcpy_b/w/l` | **Present** @ `0x0023AE`/`CA`/`E4` | MCC68K runtime variants (byte/word/long); `MOVE.x (A0)+,(A1)+` ; `DBF` |
+| `meminv_b` | **Present** @ `0x0023FE` | MRI extension: invert-copy (`NOT.B` on each byte); used for DSP loading |
+| `memcpy_bitser` | **Present** @ `0x00241E` | Bit-serial copy (`ROXR/ROXL ×8`); used for YM6007 DSP DMA |
+| `bitrev_byte` | **Present** @ `0x002464` | Helper: reverse bit order in a single byte |
 | `strcpy` | **Not found** | Short strings copied with explicit loops; LCD is only 16 chars wide |
 | `strcmp` | **Not found** | Comparisons done with `CMPI` against string literals |
 | `memset` | **Not found as standalone** | Uses `MOVE.B D0,(A1)+` inline loops |
@@ -405,8 +435,9 @@ are all present — they are simply unused dead code in the embedded target buil
 - `string.h` v1.14 is the standard ANSI C `<string.h>` — defines `strlen`, `strcpy`, `memcpy`, etc.
 - `mriext.h` v1.33 extends the standard library with MRI-specific functions (`zalloc`, `memclr`,
   `itostr`, `ftoa`) and convenience macros (`min`/`max`, `TRUE`/`FALSE`, `NULLPTR`)
-- The firmware uses only `strlen` from the standard library, and none of the MRI extensions —
-  consistent with a bare-metal build that links against `libmcc68k.a` minimally
+- The firmware uses `strlen` and the `memcpy_b/w/l` / `meminv_b` / `memcpy_bitser` runtime
+  routines from the standard library; none of the MRI extensions (`zalloc`, `memclr`, `itostr`)
+  are present — consistent with a bare-metal build that links against `libmcc68k.a` minimally
 
 **Arithmetic profile (all 3 ROMs):**
 - 243 `DIVU.W` instructions in code (÷2: 38×, ÷10: 4×, ÷16: 2×, ÷56: 1×)

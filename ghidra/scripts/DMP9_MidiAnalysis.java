@@ -77,6 +77,15 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         V111_ANCHORS.put("lcd_write_cmd",      0x0000238CL);
         V111_ANCHORS.put("lcd_write_data",     0x000023DCL);
         V111_ANCHORS.put("uart_write",         0x00002AA6L);
+        // MCC68K runtime library block (0x0023AE cluster — confirmed all 3 ROMs)
+        V111_ANCHORS.put("memcpy_b",           0x000023AEL); // byte copy: MOVE.B (A0)+,(A1)+ ; BTST #0,D0 ; BNE
+        V111_ANCHORS.put("memcpy_w",           0x000023CAL); // word copy: SUBQ.W #1,D0 ; MOVE.W (A0)+,(A1)+ ; DBF
+        V111_ANCHORS.put("memcpy_l",           0x000023E4L); // long copy: SUBQ.W #1,D0 ; MOVE.L (A0)+,(A1)+ ; DBF
+        V111_ANCHORS.put("meminv_b",           0x000023FEL); // invert-copy: MOVE.B (A0)+,D1 ; NOT.B D1 ; MOVE.B D1,(A1)+
+        V111_ANCHORS.put("memcpy_bitser",      0x0000241EL); // bit-serial: ROXR.B #1,D1 ; ROXL.B #1,D2 ×8 per byte
+        V111_ANCHORS.put("bitrev_byte",        0x00002464L); // single-byte bit reversal helper
+        V111_ANCHORS.put("memcpy_bitser_w",    0x00002488L); // word bit-serial variant
+
         // LCD string/display cluster (identified from 401-call hot-path analysis)
         V111_ANCHORS.put("strlen",             0x00007AE2L); // 67 call sites
         V111_ANCHORS.put("lcd_write_str",      0x000078D4L); // 401 calls — writes null-term str at col, tracks state

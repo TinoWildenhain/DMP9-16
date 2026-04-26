@@ -6,6 +6,7 @@
 
 # Ghidra project files (large, machine-specific)
 *.gpr
+*.rep
 *.rep/
 *.lock
 

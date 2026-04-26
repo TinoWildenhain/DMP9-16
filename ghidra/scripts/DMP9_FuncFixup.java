@@ -435,6 +435,53 @@ public class DMP9_FuncFixup extends GhidraScript {
         println("[DMP9_FuncFixup] Pass 1c: naming stub / ISR functions from vector table...");
 
         int named = 0;
+        Set<Long> namedAddrs = new HashSet<>();
+
+        // Vec 0 = initial SSP (not a function), vec 1 = initial PC = reset_handler.
+        // Handle vec 1 explicitly because the main loop starts at vec 2.
+        long resetPC;
+        try {
+            resetPC = mem.getInt(af.getDefaultAddressSpace().getAddress(4L)) & 0xFFFFFFFFL;
+        } catch (Exception e) {
+            resetPC = -1;
+        }
+        if (resetPC > 0 && resetPC != 0xFFFFFFFFL) {
+            Address resetAddr = af.getDefaultAddressSpace().getAddress(resetPC);
+            if (mem.contains(resetAddr)) {
+                Function resetFn = fm.getFunctionAt(resetAddr);
+                if (resetFn == null) {
+                    try {
+                        disassemble(resetAddr);
+                    } catch (Exception ignore) { }
+                    try {
+                        resetFn = createFunction(resetAddr, "reset_handler");
+                    } catch (Exception e) {
+                        println("  vec1: could not create reset_handler @ 0x"
+                                + Long.toHexString(resetPC) + " (" + e.getMessage() + ")");
+                    }
+                } else {
+                    String curName = resetFn.getName();
+                    if (curName != null
+                            && (curName.startsWith("FUN_")
+                                || curName.startsWith("stub_")
+                                || curName.startsWith("LAB_")
+                                || curName.startsWith("DAT_")
+                                || curName.startsWith("SUB_")
+                                || curName.startsWith("yamaha_reg"))) {
+                        try {
+                            resetFn.setName("reset_handler", SourceType.ANALYSIS);
+                        } catch (InvalidInputException e) {
+                            // ignore name collision
+                        }
+                    }
+                }
+                if (resetFn != null) {
+                    namedAddrs.add(resetPC);
+                    named++;
+                    println("  vec1 -> reset_handler @ 0x" + Long.toHexString(resetPC));
+                }
+            }
+        }
 
         for (int vecNum = 2; vecNum < 256; vecNum++) {
             String slotName = vecName[vecNum];
@@ -455,6 +502,14 @@ public class DMP9_FuncFixup extends GhidraScript {
             Address targetAddr = af.getDefaultAddressSpace().getAddress(targetOffset);
             if (!mem.contains(targetAddr)) continue;
 
+            // First match wins — only name a target address once.
+            // Many autovector slots (L1..L7) point to the same shared stub.
+            if (namedAddrs.contains(targetOffset)) {
+                println("  vec" + vecNum + " -> already named @ 0x"
+                        + Long.toHexString(targetOffset) + " (shared stub)");
+                continue;
+            }
+
             boolean isStub = (targetOffset >= 0x400L && targetOffset <= 0x9FFL);
             String funcName = isStub ? ("stub_" + slotName) : slotName;
 
@@ -474,12 +529,15 @@ public class DMP9_FuncFixup extends GhidraScript {
                 if (existing == null) continue;
             } else {
                 String curName = existing.getName();
-                // Only rename auto-generated names — preserve any human/script-set name.
-                if (curName != null
+                // Only rename truly auto-generated names — preserve any human or
+                // sibling-script-set name (e.g. names set by DMP9_MidiAnalysis).
+                boolean isAutoName = curName != null
                         && (curName.startsWith("FUN_")
                             || curName.startsWith("stub_")
                             || curName.startsWith("LAB_")
-                            || curName.startsWith("SUB_"))) {
+                            || curName.startsWith("DAT_")
+                            || curName.startsWith("SUB_"));
+                if (isAutoName) {
                     try {
                         existing.setName(funcName, SourceType.ANALYSIS);
                     } catch (InvalidInputException e) {
@@ -487,15 +545,20 @@ public class DMP9_FuncFixup extends GhidraScript {
                         try {
                             existing.setName(funcName + "_v" + vecNum, SourceType.ANALYSIS);
                         } catch (InvalidInputException e2) {
+                            namedAddrs.add(targetOffset);
                             continue;
                         }
                     }
                 } else {
-                    // Already named explicitly — leave it alone.
+                    // Already named explicitly — leave it alone but mark as taken.
+                    namedAddrs.add(targetOffset);
+                    println("  vec" + vecNum + " -> kept existing name '" + curName
+                            + "' @ 0x" + Long.toHexString(targetOffset));
                     continue;
                 }
             }
 
+            namedAddrs.add(targetOffset);
             named++;
             println("  vec" + vecNum + " -> " + existing.getName()
                     + " @ 0x" + Long.toHexString(targetOffset)

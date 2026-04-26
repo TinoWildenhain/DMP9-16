@@ -212,38 +212,18 @@ public class DMP9_MidiAnalysis extends GhidraScript {
 
     private Map<String, Function> anchorMidiFunctions(Listing listing) {
         Map<String, Function> found = new LinkedHashMap<>();
-        FunctionManager fm = currentProgram.getFunctionManager();
 
         for (Map.Entry<String, Long> entry : V111_ANCHORS.entrySet()) {
             String funcName = entry.getKey();
             long   addrVal  = entry.getValue();
-            Address a = currentProgram.getAddressFactory()
-                            .getDefaultAddressSpace().getAddress(addrVal);
 
-            // 1. Find by existing name
+            // 1. Find by existing name first — already labelled by a prior pass.
             Function f = findFunctionByName(funcName, listing);
 
-            // 2. Find by address
-            if (f == null) f = listing.getFunctionAt(a);
-
-            // 3. Disassemble + create if still missing
+            // 2. Otherwise use the overlap-safe anchor helper.
             if (f == null) {
                 try {
-                    // Ensure the bytes are disassembled as code first
-                    if (!(listing.getCodeUnitAt(a) instanceof Instruction)) {
-                        DisassembleCommand cmd =
-                            new DisassembleCommand(new AddressSet(a), null, true);
-                        cmd.applyTo(currentProgram, monitor);
-                    }
-                    // Now create the function body
-                    f = fm.createFunction(funcName, a,
-                            new AddressSet(a), SourceType.USER_DEFINED);
-                    if (f != null)
-                        println("[DMP9_MidiAnalysis] Created: " + funcName
-                                + " @ 0x" + Long.toHexString(addrVal));
-                    else
-                        println("[DMP9_MidiAnalysis] Create failed: " + funcName
-                                + " @ 0x" + Long.toHexString(addrVal));
+                    f = anchorFunction(addrVal, funcName);
                 } catch (Exception e) {
                     println("[DMP9_MidiAnalysis] Error creating " + funcName
                             + " @ 0x" + Long.toHexString(addrVal) + ": " + e.getMessage());
@@ -251,22 +231,106 @@ public class DMP9_MidiAnalysis extends GhidraScript {
             }
 
             if (f != null) {
-                // Ensure the name is set (overwrite FUN_xxx or entry)
-                if (f.getName().startsWith("FUN_") || f.getName().equals("entry")) {
-                    try {
-                        f.setName(funcName, SourceType.USER_DEFINED);
-                    } catch (Exception e) {
-                        println("  Could not rename " + f.getEntryPoint() + " to " + funcName);
-                    }
-                }
                 found.put(funcName, f);
-                println("[DMP9_MidiAnalysis] Anchored: " + funcName + " @ " + f.getEntryPoint());
             } else {
                 println("[DMP9_MidiAnalysis] MISSING: " + funcName
                         + " (expected @ 0x" + Long.toHexString(addrVal) + " in v1.11)");
             }
         }
         return found;
+    }
+
+    // -----------------------------------------------------------------------
+    // Overlap-safe function anchor.
+    //
+    // If a function already exists AT this exact address: rename if its current
+    // name is auto-generated, otherwise leave it.
+    //
+    // If the address falls inside an existing function body (Ghidra auto-merged
+    // multiple routines): do NOT call createFunction — that fails with
+    // "overlap with another namespace".  Rename the containing function only
+    // when its name is auto-generated; otherwise log a warning and return the
+    // containing function so the caller can still associate it.
+    //
+    // Otherwise: disassemble and create the function fresh.
+    // -----------------------------------------------------------------------
+    private Function anchorFunction(long addrVal, String name) throws Exception {
+        Address a = currentProgram.getAddressFactory()
+                        .getDefaultAddressSpace().getAddress(addrVal);
+        FunctionManager fm = currentProgram.getFunctionManager();
+
+        // 1. Function exists exactly at this address?
+        Function fn = fm.getFunctionAt(a);
+
+        // 2. Otherwise, are we inside a larger function body?
+        if (fn == null) {
+            Function containing = fm.getFunctionContaining(a);
+            if (containing != null) {
+                String curName = containing.getName();
+                if (curName.startsWith("FUN_") || curName.startsWith("DAT_")
+                        || curName.startsWith("LAB_") || curName.startsWith("SUB_")) {
+                    try {
+                        containing.setName(name, SourceType.ANALYSIS);
+                        println("[DMP9_MidiAnalysis] Renamed containing function to "
+                                + name + " @ " + containing.getEntryPoint());
+                    } catch (InvalidInputException e) {
+                        println("[DMP9_MidiAnalysis] Could not rename containing function to "
+                                + name + ": " + e.getMessage());
+                    }
+                } else {
+                    println("[DMP9_MidiAnalysis] WARNING: " + name + " @ 0x"
+                            + Long.toHexString(addrVal)
+                            + " is inside existing function " + curName
+                            + " — skipping rename");
+                }
+                return containing;
+            }
+        }
+
+        // 3. No function at or containing this address — create one.
+        if (fn == null) {
+            try {
+                if (!(currentProgram.getListing().getCodeUnitAt(a) instanceof Instruction)) {
+                    DisassembleCommand cmd =
+                        new DisassembleCommand(new AddressSet(a), null, true);
+                    cmd.applyTo(currentProgram, monitor);
+                }
+            } catch (Exception ignore) { }
+            try {
+                fn = createFunction(a, name);
+            } catch (Exception e) {
+                println("[DMP9_MidiAnalysis] FAILED to create " + name + " @ 0x"
+                        + Long.toHexString(addrVal) + ": " + e.getMessage());
+                return null;
+            }
+            if (fn == null) {
+                println("[DMP9_MidiAnalysis] FAILED to create " + name + " @ 0x"
+                        + Long.toHexString(addrVal));
+                return null;
+            }
+            println("[DMP9_MidiAnalysis] Anchored: " + name + " @ " + a);
+            return fn;
+        }
+
+        // 4. Function exists at exact address — rename if name is auto-generated.
+        String curName = fn.getName();
+        if (curName.startsWith("FUN_") || curName.startsWith("DAT_")
+                || curName.startsWith("LAB_") || curName.startsWith("SUB_")
+                || curName.equals("entry")) {
+            try {
+                fn.setName(name, SourceType.ANALYSIS);
+                println("[DMP9_MidiAnalysis] Anchored: " + name + " @ " + a);
+            } catch (InvalidInputException e) {
+                println("[DMP9_MidiAnalysis] Could not rename " + a + " to " + name
+                        + ": " + e.getMessage());
+            }
+        } else if (!curName.equals(name)) {
+            println("[DMP9_MidiAnalysis] Already named: " + curName + " @ " + a
+                    + " (wanted " + name + ")");
+        } else {
+            println("[DMP9_MidiAnalysis] Anchored: " + name + " @ " + a);
+        }
+        return fn;
     }
 
     private Function findFunctionByName(String name, Listing listing) {

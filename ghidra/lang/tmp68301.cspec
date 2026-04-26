@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tmp68301.cspec — Compiler specification for Yamaha DMP9/16 firmware
+  CPU: Toshiba TMP68301A (68000 core, no FPU, no 68020+ addressing modes)
+
+  Calling conventions:
+    __stdcall   — stack-based (C default for this compiler)
+                  args pushed right-to-left, callee cleans nothing (caller cleans)
+                  return value in D0 (int/ptr) or D0:D1 (long long)
+    yamaha_reg  — register-based (common in hand-written or optimised routines)
+                  args: D0, D1, D2, D3, A0, A1 (in that order)
+                  return: D0 (int/ptr)
+                  callee-saved: D4-D7, A2-A6, SP
+    __interrupt — 68k interrupt handler (entered via processor exception dispatch)
+                  no arguments, no return value, terminates with RTE
+
+  Install location (snap-safe user override):
+    mkdir -p ~/.ghidra/.ghidra_12.0_PUBLIC/languages
+    cp tmp68301.cspec  ~/.ghidra/.ghidra_12.0_PUBLIC/languages/
+    cp tmp68301.ldefs  ~/.ghidra/.ghidra_12.0_PUBLIC/languages/
+
+  After copying, restart Ghidra.  When importing a ROM binary, select:
+    Language: 68000:BE:32:MC68000
+    Compiler:  TMP68301 / Yamaha DMP9
+
+  Or re-language an existing program:
+    File → Set Language/Compiler → 68000:BE:32:MC68000 / tmp68301
+-->
+
+<compiler_spec>
+
+  <!-- ── Stack pointer ─────────────────────────────────────────────────── -->
+  <stackpointer register="SP" space="ram" growth="negative"/>
+
+  <!-- ── Data organisation (standard 68k / ILP32) ─────────────────────── -->
+  <data_organization>
+    <machine_alignment value="2"/>
+    <default_alignment value="1"/>
+    <default_pointer_alignment value="2"/>
+    <pointer_size value="4"/>
+    <wchar_size value="2"/>
+    <short_size value="2"/>
+    <integer_size value="4"/>
+    <long_size value="4"/>
+    <long_long_size value="4"/>
+    <float_size value="4"/>
+    <double_size value="4"/>
+    <long_double_size value="4"/>
+  </data_organization>
+
+  <!-- ── Global memory: the full address space is potentially global ───── -->
+  <global>
+    <range space="ram"/>
+  </global>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       DEFAULT calling convention — stack-based __stdcall
+       This is what most C-compiled functions use.
+       Caller pushes args right-to-left; callee pops nothing.
+       Return value: D0 (word/longword), or D0:D1 (64-bit, rare)
+       Callee-preserved: D2-D7, A2-A7 (SP)
+       Killed by call:   D0, D1, A0, A1
+       ═══════════════════════════════════════════════════════════════════ -->
+  <default_proto>
+    <prototype name="__stdcall" extrapop="4" stackshift="4">
+      <input>
+        <!-- All args on stack, first arg at 4(SP) after JSR -->
+        <pentry minsize="1" maxsize="500" align="2">
+          <addr offset="4" space="stack"/>
+        </pentry>
+      </input>
+      <output>
+        <!-- 8/16/32-bit return in D0 -->
+        <pentry minsize="1" maxsize="4">
+          <register name="D0"/>
+        </pentry>
+        <!-- 64-bit return (rare): D0=hi, D1=lo -->
+        <pentry minsize="5" maxsize="8">
+          <addr space="join" piece1="D0" piece2="D1"/>
+        </pentry>
+      </output>
+      <unaffected>
+        <register name="D2"/>
+        <register name="D3"/>
+        <register name="D4"/>
+        <register name="D5"/>
+        <register name="D6"/>
+        <register name="D7"/>
+        <register name="A2"/>
+        <register name="A3"/>
+        <register name="A4"/>
+        <register name="A5"/>
+        <register name="A6"/>
+        <register name="SP"/>
+      </unaffected>
+      <killedbycall>
+        <register name="D0"/>
+        <register name="D1"/>
+        <register name="A0"/>
+        <register name="A1"/>
+      </killedbycall>
+    </prototype>
+  </default_proto>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       REGISTER calling convention — yamaha_reg
+       Used by hand-written routines and compiler-optimised leaf functions.
+       Args:   D0, D1, D2, D3 (data), A0, A1 (address/pointer)
+       Return: D0 (int/ptr)
+       Callee-preserved: D4-D7, A2-A6, SP
+       ═══════════════════════════════════════════════════════════════════ -->
+  <prototype name="yamaha_reg" extrapop="4" stackshift="4">
+    <input>
+      <pentry minsize="1" maxsize="4"><register name="D0"/></pentry>
+      <pentry minsize="1" maxsize="4"><register name="D1"/></pentry>
+      <pentry minsize="1" maxsize="4"><register name="D2"/></pentry>
+      <pentry minsize="1" maxsize="4"><register name="D3"/></pentry>
+      <pentry minsize="1" maxsize="4"><register name="A0"/></pentry>
+      <pentry minsize="1" maxsize="4"><register name="A1"/></pentry>
+      <!-- Spill to stack if more than 6 args (unusual but possible) -->
+      <pentry minsize="1" maxsize="500" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="4">
+        <register name="D0"/>
+      </pentry>
+      <!-- Pointer return may come back in A0 instead — mark both -->
+      <pentry minsize="1" maxsize="4">
+        <register name="A0"/>
+      </pentry>
+    </output>
+    <unaffected>
+      <register name="D4"/>
+      <register name="D5"/>
+      <register name="D6"/>
+      <register name="D7"/>
+      <register name="A2"/>
+      <register name="A3"/>
+      <register name="A4"/>
+      <register name="A5"/>
+      <register name="A6"/>
+      <register name="SP"/>
+    </unaffected>
+    <killedbycall>
+      <register name="D0"/>
+      <register name="D1"/>
+      <register name="D2"/>
+      <register name="D3"/>
+      <register name="A0"/>
+      <register name="A1"/>
+    </killedbycall>
+  </prototype>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       INTERRUPT calling convention
+       Entered via the 68k exception vector table (hardware dispatch).
+       No arguments.  No conventional return — terminates with RTE.
+       All registers are effectively preserved by the hardware stacking.
+       Mark as noreturn=false because RTE does return, just not via RTS.
+       ═══════════════════════════════════════════════════════════════════ -->
+  <prototype name="__interrupt" extrapop="0" stackshift="0">
+    <input><void/></input>
+    <output><void/></output>
+    <unaffected>
+      <register name="D0"/>
+      <register name="D1"/>
+      <register name="D2"/>
+      <register name="D3"/>
+      <register name="D4"/>
+      <register name="D5"/>
+      <register name="D6"/>
+      <register name="D7"/>
+      <register name="A0"/>
+      <register name="A1"/>
+      <register name="A2"/>
+      <register name="A3"/>
+      <register name="A4"/>
+      <register name="A5"/>
+      <register name="A6"/>
+      <register name="SP"/>
+    </unaffected>
+  </prototype>
+
+</compiler_spec>

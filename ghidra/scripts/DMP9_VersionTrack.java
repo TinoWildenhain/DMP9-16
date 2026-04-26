@@ -339,7 +339,7 @@ public class DMP9_VersionTrack extends GhidraScript {
             if (src.plateComment != null && !src.plateComment.isBlank()) {
                 currentProgram.getListing().setComment(
                     tgtFunc.getEntryPoint(),
-                    ghidra.program.model.listing.CodeUnit.PLATE_COMMENT,
+                    CommentType.PLATE,
                     "[VT from " + src.sourceName + "] " + src.plateComment
                 );
             }
@@ -477,7 +477,7 @@ public class DMP9_VersionTrack extends GhidraScript {
             this.signature         = sig;
             this.callingConvention = f.getCallingConventionName();
             this.plateComment      = f.getProgram().getListing()
-                .getComment(ghidra.program.model.listing.CodeUnit.PLATE_COMMENT, f.getEntryPoint());
+                .getComment(CommentType.PLATE, f.getEntryPoint());
             this.sourceName        = f.getProgram().getName();
             this.returnType        = f.getReturnType();
         }

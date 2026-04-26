@@ -291,7 +291,7 @@ public class DMP9_Setup extends GhidraScript {
             Address hAddr = as.getAddress(handlerAddr);
             try {
                 st.createLabel(hAddr, handlerName, SourceType.USER_DEFINED);
-                listing.setComment(hAddr, CodeUnit.PLATE_COMMENT,
+                listing.setComment(hAddr, CommentType.PLATE,
                     comment + "\nVec[" + i + "] @ ROM+0x" + Integer.toHexString(offset));
 
                 // Only seed disassembly in ROM range
@@ -483,7 +483,7 @@ public class DMP9_Setup extends GhidraScript {
             Address a = as.getAddress(addr);
             st.createLabel(a, name, SourceType.USER_DEFINED);
             if (comment != null && !comment.isEmpty())
-                listing.setComment(a, CodeUnit.EOL_COMMENT, comment);
+                listing.setComment(a, CommentType.EOL, comment);
         } catch (Exception e) {
             println("  Label error " + name + ": " + e.getMessage());
         }
@@ -497,7 +497,7 @@ public class DMP9_Setup extends GhidraScript {
             st.createLabel(a, name, SourceType.USER_DEFINED);
             String cmt = comment;
             if (regCall) cmt += "\nRE_NOTE: register-call convention -- review parameter assignment";
-            listing.setComment(a, CodeUnit.PLATE_COMMENT, cmt);
+            listing.setComment(a, CommentType.PLATE, cmt);
 
             // Seed disassembly if not already code
             if (listing.getCodeUnitAt(a) == null ||
@@ -519,7 +519,7 @@ public class DMP9_Setup extends GhidraScript {
         try {
             Address a = as.getAddress(addr);
             st.createLabel(a, name, SourceType.USER_DEFINED);
-            listing.setComment(a, CodeUnit.PLATE_COMMENT,
+            listing.setComment(a, CommentType.PLATE,
                 comment + "\nSize: 0x" + Integer.toHexString(size) + " bytes"
                 + "\nRE_NOTE: layout inferred from ROM access patterns -- verify");
             // Apply a byte-array placeholder so Ghidra shows the extent

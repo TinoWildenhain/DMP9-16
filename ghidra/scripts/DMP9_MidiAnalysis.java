@@ -455,7 +455,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
     // -----------------------------------------------------------------------
 
     private void annotateCcParamTable(Listing listing, Memory mem) {
-        Address tblBase = toAddr(CC_PARAM_TABLE_BASE);
+        Address tblBase = addr(CC_PARAM_TABLE_BASE);
         if (tblBase == null) return;
 
         println("[DMP9_MidiAnalysis] Annotating CC parameter table @ " + tblBase);
@@ -471,7 +471,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // Set a plate comment on the table base address.
 
         try {
-            listing.setComment(tblBase, CodeUnit.PLATE_COMMENT,
+            listing.setComment(tblBase, CommentType.PLATE,
                 "CTRL Change parameter table\n" +
                 "671 parameters × 16 banks × 96 CCs\n" +
                 "Format: [bank_index_table][param_name_string_table]\n" +
@@ -547,10 +547,10 @@ public class DMP9_MidiAnalysis extends GhidraScript {
                 try {
                     Address ep = rx.getEntryPoint();
                     String existing = currentProgram.getListing()
-                        .getComment(CodeUnit.PLATE_COMMENT, ep);
+                        .getComment(CommentType.PLATE, ep);
                     String note = "\n\nPOTENTIAL UNDOCUMENTED: " + name + " (0x" +
                         Integer.toHexString(s) + ") handler found — investigate!";
-                    currentProgram.getListing().setComment(ep, CodeUnit.PLATE_COMMENT,
+                    currentProgram.getListing().setComment(ep, CommentType.PLATE,
                         (existing != null ? existing : "") + note);
                 } catch (Exception ignored) {}
             }
@@ -572,7 +572,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
     private String detectRomVersion(Memory mem) {
         try {
             // v1.11 has "Version 1.11" at 0x050617
-            Address a = toAddr(0x050617L);
+            Address a = addr(0x050617L);
             byte[] buf = new byte[16];
             mem.getBytes(a, buf);
             String s = new String(buf).trim();
@@ -628,9 +628,9 @@ public class DMP9_MidiAnalysis extends GhidraScript {
     private void setPlateIfEmpty(Address addr, String comment) {
         try {
             Listing lst = currentProgram.getListing();
-            String existing = lst.getComment(CodeUnit.PLATE_COMMENT, addr);
+            String existing = lst.getComment(CommentType.PLATE, addr);
             if (existing == null || existing.isBlank()) {
-                lst.setComment(addr, CodeUnit.PLATE_COMMENT, comment);
+                lst.setComment(addr, CommentType.PLATE, comment);
             }
         } catch (Exception ignored) {}
     }
@@ -638,14 +638,14 @@ public class DMP9_MidiAnalysis extends GhidraScript {
     private void setEolComment(Address addr, String comment) {
         try {
             Listing lst = currentProgram.getListing();
-            String existing = lst.getComment(CodeUnit.EOL_COMMENT, addr);
+            String existing = lst.getComment(CommentType.EOL, addr);
             if (existing == null || existing.isBlank()) {
-                lst.setComment(addr, CodeUnit.EOL_COMMENT, comment);
+                lst.setComment(addr, CommentType.EOL, comment);
             }
         } catch (Exception ignored) {}
     }
 
-    private Address toAddr(long offset) {
+    private Address addr(long offset) {
         return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
     }
 }

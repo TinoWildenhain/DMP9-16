@@ -144,10 +144,15 @@ MEMORY {
 }
 
 SECTIONS {
-    /* ── Vector table ── 96 × 4 bytes at ROM base */
+    /*
+     * PINNED: Vector table — must be at ROM base (68000 hardware requirement).
+     * 96 vectors × 4 bytes.  THIS IS THE ONLY ADDRESS WE HARD-PIN IN CODE.
+     * Everything else (functions, strings, data) may move between versions;
+     * the goal is functional equivalence, not byte-identical output.
+     */
     .vectors 0x000000 : {
         KEEP(*(.vectors))
-        . = 0x000180;        /* pad to end of vector table */
+        . = 0x000180;   /* 0x180 = 96 vectors × 4 bytes */
     } > ROM
 
     /* ── Code ── MCC68K "code" section */
@@ -156,45 +161,58 @@ SECTIONS {
         . = ALIGN(2);
     } > ROM
 
-    /* ── String literals ── MCC68K "strings" section, fixed at 0x050000 */
-    .strings 0x050000 : {
-        KEEP(*(.strings))
-        *(.strings.*)
+    /*
+     * MCC68K "strings" section — compiler places string literals here.
+     * NOT pinned to 0x050000 — let the linker place it after .text.
+     * The compiled strings will differ in address from the original ROM,
+     * which is acceptable for a faithful functional reimplementation.
+     *
+     * If you want to verify specific string addresses from the ROM against
+     * your decompiled output, use the sym_addresses.tsv from DMP9_ExportC.
+     * Only pin addresses when you have confirmed a function is complete and
+     * byte-identical to the original.
+     */
+    .strings : {
+        *(.strings .strings.*)
         . = ALIGN(2);
     } > ROM
 
-    /* ── Numeric/table literals ── MCC68K "literals" section */
-    /* Placed immediately after .strings; exact address depends on string table size */
-    .literals : {
+    /* ── MCC68K "literals" + GCC .rodata — numeric constants, jump tables */
+    .rodata : {
+        *(.rodata .rodata.*)
         *(.literals .literals.*)
-        *(.rodata .rodata.*)    /* GCC equivalent of literals+const */
         . = ALIGN(2);
     } > ROM
 
-    /* ── Const globals ── MCC68K "const" section */
+    /* ── MCC68K "const" section — const-qualified global data */
     .const : {
         *(.const .const.*)
         . = ALIGN(2);
     } > ROM
 
-    /* ── DSP coefficient tables ── binary extract, identical across all 3 ROMs */
-    /* Uncomment and provide dsp_tables.o if/when extracted:
-    .dsp_coeff 0x059B00 : {
+    /*
+     * PINNED hardware interfaces — these addresses are dictated by external
+     * hardware (PCB trace routing) and must not change:
+     *
+     *   0x400000  DRAM base (SSP init value in vector table confirms this)
+     *   0x460000  DSP_EF1 (YM3804 base)
+     *   0x470000  DSP_EF2 (YM3804 base)
+     *   0x490000  LCD_CMD  (HD44780)
+     *   0x490001  LCD_DATA (HD44780)
+     *   0xFFFC00+ TMP68301 SFRs
+     *
+     * These are defined in src/hw/dmp9_board_regs.h as volatile #define
+     * macros, not as linker symbols, so no special section needed here.
+     */
+
+    /* ── DSP coefficient tables — binary-identical across all 3 ROMs */
+    /* Uncomment when dsp_tables.o is extracted:
+    .dsp_coeff 0x059B00 (NOLOAD) : {
         KEEP(*(.dsp_coeff))
     } > ROM
     */
 
-    /* ── Version string ── fixed placement for ROM verification */
-    /* Must land at 0x050617 within the .strings section above */
-    /* The version string is part of the dmp9_strings struct — */
-    /* no separate section needed if the struct is laid out correctly */
-
-    /* ── Fault string ── last page of ROM */
-    .fault 0x07FF00 : {
-        KEEP(*(.fault))
-    } > ROM
-
-    /* ── Initialised variables ── load from ROM, run in DRAM */
+    /* ── Initialised variables ── load address in ROM, run address in DRAM */
     .data : {
         _data_start = .;
         *(.data .data.*)
@@ -202,7 +220,7 @@ SECTIONS {
     } > DRAM AT > ROM
     _data_load = LOADADDR(.data);
 
-    /* ── BSS ── zero-initialised, DRAM only */
+    /* ── BSS ── zero-initialised, RAM only (no ROM space needed) */
     .bss (NOLOAD) : {
         _bss_start = .;
         *(.bss .bss.* COMMON)

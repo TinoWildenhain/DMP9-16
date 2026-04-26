@@ -56,7 +56,10 @@ for arg in "$@"; do
         --incremental)  MODE="incremental" ;;
         --export)       MODE="export" ;;
         --export-only)  MODE="export-only" ;;
-        --*)            echo "ERROR: Unknown flag: $arg"; echo "  Valid: --full --incremental --export --export-only"; exit 1 ;;
+        --version-track) MODE="version-track" ;;
+        --*)            echo "ERROR: Unknown flag: $arg"
+                        echo "  Valid: --full --incremental --export --export-only --version-track"
+                        exit 1 ;;
         *)              POSITIONAL+=("$arg") ;;
     esac
 done
@@ -196,6 +199,7 @@ run_full() {
         -postScript DMP9_Board_Setup.java \
         -postScript DMP9_FuncFixup.java \
         -postScript DMP9_LibMatch.java \
+        -postScript DMP9_MidiAnalysis.java \
         -scriptPath "$SCRIPT_DIR" \
         -log "$logfile" \
         2>&1 | tee -a "$logfile"
@@ -230,6 +234,7 @@ run_incremental() {
         -postScript DMP9_Board_Setup.java \
         -postScript DMP9_FuncFixup.java \
         -postScript DMP9_LibMatch.java \
+        -postScript DMP9_MidiAnalysis.java \
         -scriptPath "$SCRIPT_DIR" \
         -log "$logfile" \
         2>&1 | tee -a "$logfile"
@@ -237,6 +242,45 @@ run_incremental() {
     local rc=$?; local t_end; t_end=$(date +%s)
     local elapsed=$(( t_end - t_start ))
     if [ $rc -eq 0 ]; then echo "  OK: $label in ${elapsed}s"; else echo "  FAIL: $label (rc=$rc, ${elapsed}s)"; fi
+    return $rc
+}
+
+# Run DMP9_VersionTrack.java on a target ROM, using XN349G0 as source
+run_version_track() {
+    local label="$1" version="$2" date="$3" glob="$4"
+    local logfile="$LOG_DIR/vtrack_${label}.log"
+    local rom_path; rom_path=$(find_rom "$glob")
+
+    echo ""
+    echo "=== $label ($version) — VERSION TRACK ==="
+    if [ -z "$rom_path" ]; then echo "  SKIP: ROM not found"; return 0; fi
+
+    local prog_name; prog_name=$(basename "$rom_path")
+    echo "  Program: $prog_name"
+    echo "  Source:  XN349G0 (v1.11)"
+    echo "  Log:     $logfile"
+
+    local t_start; t_start=$(date +%s)
+
+    DMP9_EXPORT_DIR="$EXPORT_DIR/$label" \
+    "$ANALYZE_HEADLESS" \
+        "$PROJECTS_DIR" "$PROJECT_NAME" \
+        -process "$prog_name" \
+        -noanalysis \
+        -postScript "DMP9_VersionTrack.java" "XN349G0" \
+        -scriptPath "$SCRIPT_DIR" \
+        -log "$logfile" \
+        2>&1 | tee -a "$logfile"
+
+    local rc=$?; local t_end; t_end=$(date +%s)
+    local elapsed=$(( t_end - t_start ))
+    if [ $rc -eq 0 ]; then
+        echo "  OK: $label version-tracked in ${elapsed}s"
+        local report="$EXPORT_DIR/$label/version_track/match_report.md"
+        [ -f "$report" ] && echo "  Report: $report"
+    else
+        echo "  FAIL: $label (rc=$rc, ${elapsed}s)"
+    fi
     return $rc
 }
 
@@ -346,6 +390,14 @@ for entry in "${ROMS[@]}"; do
             ;;
         export-only)
             run_export "$label" "$version" "$date" "$glob" || FAIL_COUNT=$((FAIL_COUNT + 1))
+            ;;
+        version-track)
+            # Skip v1.11 (the source) — only run on the other two
+            if [ "$label" = "XN349G0" ]; then
+                echo "  Skipping $label (this is the source ROM for version tracking)"
+                continue
+            fi
+            run_version_track "$label" "$version" "$date" "$glob" || FAIL_COUNT=$((FAIL_COUNT + 1))
             ;;
     esac
 done

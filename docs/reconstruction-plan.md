@@ -10,6 +10,11 @@ links into a **functionally equivalent** binary — not necessarily bit-identica
 the same runtime behaviour with hardware addresses (I/O registers, peripheral buffers) preserved
 at their original locations.
 
+A secondary goal is to discover MIDI controls and SysEx sub-commands that are **undocumented
+in the service manuals**, and potentially to extend the firmware with new MIDI functionality.
+The DMP9's predecessor family (DMP7/DMP11) provides important architectural context for
+understanding what may have survived or evolved in the DMP9's MIDI implementation.
+
 ---
 
 ## Hardware Platform
@@ -128,7 +133,7 @@ all three ROM versions**. They are extracted once from any ROM and shared as
 Notable patch regions:
 - `0x000006–0x000007` — Reset PC minor offset change
 - `0x000FE3–0x001053` (113 B) — Timing/init sequence modification
-- `0x006699–0x006AD1` — Display/LCD handler area
+- `0x006699–0x006Ad1` — Display/LCD handler area
 - `0x00DF81–0x00E311` (913 B) — Large fix, likely MIDI or effect processing
 - `0x00E505–0x00E8C9` (965 B) — Another large patch
 - `0x012A8F–0x03F50D` (182 KB) — Re-linked block (function insert/remove shifted addresses)
@@ -192,9 +197,121 @@ This maps to the ISR stubs at `0x000400–0x0007FF`.
 | `0x0000274E` | `dsp_ef1_write` | `void(...)` | Write EF1 DSP register |
 | `0x00002904` | `dsp_ef2_write` | `void(...)` | Write EF2 DSP register |
 | `0x000122E0` | `midi_tx_byte` | `void(uint8_t b) __stdcall` | SC0 UART transmit |
-| `0x000128EC` | `midi_process_rx` | `void(...)` | MIDI message dispatch |
+| `0x000128EC` | `midi_process_rx` | `void(...)` | MIDI message parsing core |
 | `0x00013454` | `scene_recall` | `void(int n)` | Recall scene memory n |
 | `0x00013186` | `scene_store` | `void(int n)` | Store scene memory n |
+
+---
+
+## Analysis Strategy
+
+### Guiding principle: gradual naming, no address pinning
+
+Because all three ROM versions represent the same firmware at different stages of development,
+the goal is to build up function names and argument types **incrementally** using Ghidra's
+tooling, rather than hard-coding addresses into the source or linker.
+
+Only addresses that are **physically fixed by the hardware** should be pinned:
+
+| What | How pinned | Rationale |
+|------|-----------|-----------|
+| Exception vector table | Linker: `.vectors AT(0x000000)` | Processor mandates 0x000000 |
+| DSP coefficient tables | `.incbin` from extracted binary | Identical across all 3 ROMs |
+| Hardware I/O (LCD, DSP, DRAM) | `#define` macros in `dmp9_board_regs.h` | PLD-decoded fixed bus addresses |
+| TMP68301 SFR base | `#define TMP68301_BASE 0xFFFC00` | On-chip, processor-fixed |
+
+Everything else — code sections, string tables, library functions — is allowed to float
+and is placed by the compiler/linker. The output only needs to fit within 512 KB ROM space
+and maintain correct vector-to-code references.
+
+This strategy allows:
+- The same source tree to compile for all three ROM versions
+- Gradual recovery of function names and signatures without breaking the build
+- Accurate comparison of functional differences between versions (rather than address differences)
+
+### Cross-ROM Version Tracking workflow
+
+`DMP9_VersionTrack.java` (in `ghidra/scripts/`) implements byte-pattern cross-ROM function
+matching. The typical workflow:
+
+1. Run a full analysis on v1.11 (canonical) and manually name functions as you identify them.
+2. Run `--version-track` mode in `run_analysis.sh` to propagate names, data types, and
+   comments from v1.11 into v1.10 and v1.02 projects using byte-pattern matching.
+3. Review the match report (`analysis/version_track/match_report.md`) for false positives
+   (functions that changed significantly between versions may match at the wrong address).
+4. Iterate: as more functions are named in v1.11, re-run version tracking to propagate.
+
+```bash
+# Run version tracking (propagates v1.11 → v1.10, v1.11 → v1.02)
+bash ghidra/scripts/run_analysis.sh --version-track
+
+# Match report location
+cat analysis/version_track/match_report.md
+cat analysis/version_track/match_data.json
+```
+
+### MIDI undocumented command investigation
+
+The primary research goal — beyond reconstruction — is to discover MIDI controls and SysEx
+sub-commands that are **not documented in the DMP9 service or owner's manuals**. The approach:
+
+1. `DMP9_MidiAnalysis.java` labels all known MIDI anchor points (from confirmed function
+   addresses) and annotates the CC parameter table and SysEx dispatch table with comments.
+2. The script also scans for **Note On** (`0x9n`) and **Pitch Bend** (`0xEn`) handlers —
+   these are undocumented in the DMP9 manual but are suspected to have survived from the
+   DMP7/DMP11 era (see next section).
+3. After running the script, review the plate comments on `midi_process_rx` and any
+   newly labeled `midi_note_handler` / `midi_pitchbend_handler` functions in Ghidra.
+4. Findings from all three ROM versions can be diffed to see whether undocumented handlers
+   were added, modified, or removed across the v1.02 → v1.10 → v1.11 progression.
+
+---
+
+## DMP7 / DMP11 Context
+
+The DMP9 is the third generation of Yamaha's digital rack mixer line. Understanding its
+predecessors helps interpret the DMP9's MIDI implementation, especially for undocumented
+features that may have carried over.
+
+### DMP7 and DMP11 architecture
+
+| Parameter | DMP7 / DMP11 | DMP9 / DMP16 |
+|-----------|-------------|-------------|
+| CPU | Motorola MC6809 (8-bit, ~1 MHz) | Toshiba TMP68301 (68000 core, 16 MHz) |
+| Architecture | 8-bit, Harvard-ish | 32-bit, 68000 |
+| MIDI control method | **Note On (0x9n)** for 206-parameter real-time control | **Control Change (0xBn)**, 671 params, 16 banks |
+| Pitch shift MIDI | **Pitch Bend (0xEn)** | CC-based effect parameter |
+| Parameter count | 206 | 671 |
+| Scene memories | Yes | 50 scenes |
+
+### DMP7 MIDI implementation (for comparison)
+
+The DMP7 used Note On events (`0x9n`) as a general-purpose parameter control mechanism:
+- Note number selected the parameter index (0–127, covering 206 parameters)
+- Velocity set the parameter value
+- This was documented in the DMP7 owner's guide but is **completely non-standard** MIDI usage
+
+Pitch shift (on the DMP7's effects section) was controlled via Pitch Bend events (`0xEn`),
+making real-time pitch control possible from a keyboard controller.
+
+The DMP11 shared the same MC6809 architecture and similar MIDI approach.
+
+### What may have survived in the DMP9
+
+When Yamaha redesigned the DMP9 on the TMP68301 platform, they expanded the parameter
+count from 206 to 671 and switched to a CC-based bank/select system. However:
+
+- The `DMP9_MidiAnalysis.java` scan checks whether `0x9n` (Note On) and `0xEn` (Pitch Bend)
+  dispatch cases exist anywhere in the MIDI parser — these would indicate undocumented
+  backward-compatibility handlers
+- The `0x9n` path is particularly interesting: if the DMP9 retained Note On → parameter
+  control, it would allow a DMP7-style control workflow on DMP9 hardware
+- Any such handlers would appear as branches from the `midi_process_rx` dispatch table
+  that are not accounted for by the documented CC/PGM/SysEx handlers
+
+The version-to-version diff (v1.02 → v1.10 → v1.11) of the MIDI dispatcher region
+(`0x00DF81–0x00E311` is a known large patch in v1.10→v1.11) may reveal when/whether
+these were added or removed.
 
 ---
 
@@ -220,16 +337,17 @@ Each ROM version lives in its own directory `src/XN349xx/`:
 src/
 ├── shared/
 │   ├── dsp_tables.S        # Coefficient tables (identical — extracted once)
-│   └── dsp_tables.h
+│   ├── dsp_tables.h
+│   ├── rom_strings.h       # Packed const struct dmp9_rom_strings at 0x050000
+│   └── rom_strings.c       # Designated initializer instance
 ├── hw/
 │   ├── tmp68301_regs.h     # TMP68301 internal register map (847 lines)
-│   ├── dmp9_board_regs.h   # Board-level addresses (LCD, DSP, RAM)
+│   ├── dmp9_board_regs.h   # Board-level addresses (LCD, DSP, RAM) — all #define macros
 │   ├── vectors.h           # m68k_vector_table_t C struct + _Static_assert
 │   ├── isr.h               # ISR stub declarations
 │   └── startup.h           # Reset handler prototype
 ├── XN349E0/                # v1.02
 │   ├── vectors.c           # Vector table (C struct, placed at 0x000000)
-│   ├── vectors.h
 │   ├── isr.c               # ISR stubs
 │   ├── startup.c           # Reset handler, hardware init
 │   ├── main.c              # Main firmware (bulk — placeholder)
@@ -255,24 +373,40 @@ src/
 sudo apt-get install gcc-m68k-linux-gnu binutils-m68k-linux-gnu
 ```
 
-### Build targets
+### Compiler flags (MCC68K-compatible subset via GCC)
 
-```sh
-make VERSION=XN349G0          # Build v1.11
-make VERSION=XN349F0          # Build v1.10
-make VERSION=XN349E0          # Build v1.02
-make all                      # Build all three
-make verify VERSION=XN349G0   # Size/checksum verification
+The firmware was compiled with **Microtec Research MCC68K v4.x**. The equivalent
+GCC flags for a faithful reconstruction are:
+
+```
+-m68000 -Os -mshort -funsigned-char -ffreestanding -fno-builtin -fno-common -nostdlib
 ```
 
-### Linker constraints
+Key flags:
+- `-mshort` — `int` is 16-bit (critical — MCC68K default)
+- `-funsigned-char` — `char` is unsigned
+- `-Os` — optimize for size (matches MCC68K's typical output density)
 
-- Hardware I/O addresses are `volatile` pointers — never relocated
-- CPU stack `0x0040FED0` preserved as linker symbol
-- Vector table at `0x000000` (ROM base), via `m68k_vector_table_t` C struct
-- Version string at `0x05059A` (fixed section placement)
-- DSP coefficient tables at `0x059B00` (fixed, `.incbin` from binary extract)
-- Data/BSS in DRAM `0x400000+`
+### Compile script
+
+```bash
+bash ghidra/scripts/compile.sh \
+    ~/dmp9_export/XN349G0 \
+    roms/dumps/TMS27C240-10-DMP9-16-XN349G0-v1.11-10.03.1994.bin
+```
+
+### Linker constraints (current policy)
+
+Only the following are pinned in the linker script:
+
+| Section | Address | Reason |
+|---------|---------|--------|
+| `.vectors` | `0x000000` | 68000 hardware requirement |
+| DSP coefficient tables | `0x059B00` | `.incbin` of extracted binary — ROM-position-dependent |
+
+Hardware I/O addresses are expressed as `#define` macros in `dmp9_board_regs.h` —
+they are baked in as immediate constants by the compiler, not as linker symbols.
+String tables and all code sections float freely within the 512 KB ROM space.
 
 ---
 
@@ -289,9 +423,18 @@ For each ROM:
    - Pass 2: Heuristic prologue scan (`__stdcall` vs `yamaha_reg`)
    - Pass 3: Protects ISR entries from Pass 2 overwrite
 6. Run `DMP9_LibMatch.java` — byte-pattern matching for known library functions
-7. Enable auto-analysis with **Decompiler Parameter ID**
-8. Manual review; refine conventions as needed
-9. Export decompiler output per module
+7. Run `DMP9_MidiAnalysis.java` — labels MIDI anchors, annotates CC table and SysEx dispatch, scans for undocumented Note On / Pitch Bend handlers
+8. Enable auto-analysis with **Decompiler Parameter ID**
+9. Manual review; refine conventions as needed
+10. Export decompiler output per module via `DMP9_ExportC.java`
+
+### Cross-ROM version propagation
+
+After step 9 on v1.11 (canonical):
+
+11. Run `--version-track` mode to propagate names/types/comments to v1.10 and v1.02
+12. Review `analysis/version_track/match_report.md` for false positives
+13. Repeat steps 9–12 iteratively as more functions are named
 
 For headless (CI) operation: see `ghidra/HEADLESS.md` and `ghidra/scripts/run_analysis.sh`.
 
@@ -334,14 +477,16 @@ diff -ru src/XN349F0 src/XN349G0   # Full source diff
 
 ## Open Questions / Future Work
 
+- [ ] Complete function naming in v1.11 — use `DMP9_MidiAnalysis.java` output as starting point for MIDI dispatcher
+- [ ] Confirm or refute presence of Note On (`0x9n`) / Pitch Bend (`0xEn`) handlers in DMP9 (undoc DMP7 legacy)
+- [ ] Map all SysEx sub_status values — documented: `0x75` `0x7D` `0x7E` `0x7C` `0x7F` `0x7B`; scan for others
+- [ ] Compare MIDI dispatcher across v1.02/v1.10/v1.11 — region `0x00DF81–0x00E311` is a known large patch
 - [ ] Identify Yamaha in-house C compiler/linker (version, flags) — explains calling convention mix
-- [ ] Map all MIDI SysEx command tables (suspected in `0x050000–0x059A54`)
-- [ ] Identify DSP coefficient table format (YM3804/YM3807 register dumps?)
+- [ ] Map DSP coefficient table format (YM3804/YM3807 register dumps?)
 - [ ] Determine whether `yamaha_reg` functions are hand-written assembly or custom compiler output
 - [ ] Confirm DRAM layout: precise stack vs DSP delay buffer boundary at runtime
 - [ ] Map effect parameter names from string table to DSP EF1/EF2 register write sequences
-- [ ] Run Ghidra Version Tracking from v1.11 → v1.10 → v1.02 to propagate markup
-- [ ] Write `DMP9_ExportDecompiled.java` for automated per-function C output
+- [ ] Extend firmware: add new SysEx sub_status or Note On handler (long-term goal, after reconstruction)
 
 ---
 

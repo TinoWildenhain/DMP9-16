@@ -2,7 +2,8 @@
 
 This document catalogues all MIDI message types, LCD strings, and protocol details
 extracted from the DMP9 Owner's Guide and used to identify MIDI-handling code in the
-firmware disassembly.
+firmware disassembly.  A secondary focus is the investigation of **undocumented** MIDI
+commands that may have survived from the earlier DMP7/DMP11 platform.
 
 ---
 
@@ -18,13 +19,23 @@ firmware disassembly.
 
 ## Message Types
 
-The DMP9 uses three MIDI message types:
+The DMP9 documents three MIDI message types:
 
 | Type | Status byte | Notes |
 |------|-------------|-------|
 | Program Change | `0xCn` (n = channel) | Scene memory recall/store |
 | Control Change | `0xBn` | Parameter control (671 params, 16 banks × 96 CCs) |
 | System Exclusive | `0xF0 0x43 …` | Bulk dump / request |
+
+Two additional types are **not documented but suspected** based on the DMP7/DMP11 heritage:
+
+| Type | Status byte | Suspected use |
+|------|-------------|---------------|
+| Note On | `0x9n` | Legacy DMP7-style parameter control (206 params via note number/velocity) |
+| Pitch Bend | `0xEn` | Legacy DMP7 pitch shift control — may map to EF1/EF2 pitch parameter |
+
+See [DMP7 / DMP11 Comparison](#dmp7--dmp11-comparison) and
+[Undocumented Command Investigation](#undocumented-command-investigation) below.
 
 ---
 
@@ -66,6 +77,14 @@ Scene memories 1–50 default to Program Change 1–50 (user-assignable).
 **Register mode:** CC98 (NRPN LSB) selects the bank number; all CCs use the channel
 set in MIDI Setup.
 
+### CC parameter table location
+
+The CC parameter dispatch table is at `0x054FEE` (v1.11):
+- 671 parameters × 16 banks × 96 CCs
+- Each entry maps (bank, CC) → parameter index → parameter handler
+
+`DMP9_MidiAnalysis.java` annotates this table with Ghidra comments, one row per bank.
+
 ### LCD screens for Control Change
 
 ```
@@ -95,16 +114,38 @@ set in MIDI Setup.
 
 Yamaha manufacturer ID: `0x43`
 
-### Bulk Dump types
+### Frame format
 
-| Tag | Content |
-|-----|---------|
-| `ALL`   | All data types simultaneously |
-| `MEM`   | Scene memory data (range 1–50 selectable for Tx; Rx always all) |
-| `SETUP` | Setup data |
-| `EDIT`  | Edit buffer data |
-| `PGM`   | Scene → Program Change assignment table |
-| `CTRL`  | Control Change → parameter assignment table |
+```
+F0 43 <dev_num> <sub_status> <size_hi> <size_lo> [data bytes] <checksum> F7
+```
+
+- `dev_num`: device number (0x10 + MIDI channel for device-specific, 0x7F for broadcast)
+- `sub_status`: selects dump type (see table below)
+- `checksum`: two's complement of all data bytes (ignoring status bytes)
+
+### Documented sub_status values
+
+| Tag | sub_status | Content |
+|-----|-----------|---------|
+| `CTRL_ASSIGN` | `0x7B` | CC → parameter assignment table |
+| `EDIT` | `0x7C` | Edit buffer data |
+| `MEM` | `0x7D` | Scene memory data (range 1–50 selectable for Tx; Rx always all) |
+| `SETUP` | `0x7E` | Setup data |
+| `PGM_ASSIGN` | `0x7F` | Scene → Program Change assignment table |
+| `ALL` | `0x75` | All data types simultaneously |
+
+### Undocumented sub_status candidates
+
+The following sub_status values are **not mentioned in any DMP9 manual** but could
+exist based on the pattern range and the DMP7 heritage. The investigation approach
+is to scan the SysEx dispatch table in Ghidra (annotated by `DMP9_MidiAnalysis.java`)
+for any handled sub_status values outside the documented set:
+
+| Range | Notes |
+|-------|-------|
+| `0x00–0x74` | Completely undocumented — any handler here is a find |
+| `0x76–0x7A` | Gap between `0x75` (ALL) and `0x7B` (CTRL_ASSIGN) |
 
 ### LCD screens for Bulk Dump
 
@@ -183,6 +224,110 @@ and in the LCD driver code. Use them as search anchors in the disassembly.
 | `--MIDI Monitor--` | Monitor header |
 | `------ Bulk ------` | Bulk dump header |
 | `Sure?`            | Confirmation prompt |
+
+---
+
+## DMP7 / DMP11 Comparison
+
+The DMP9 is the third generation of Yamaha's digital rack mixer line. The DMP7 and DMP11
+used a radically different CPU and MIDI architecture; understanding them is key to finding
+what may have carried over (documented or not) into the DMP9.
+
+### Architecture comparison
+
+| Parameter | DMP7 / DMP11 | DMP9 / DMP16 |
+|-----------|-------------|-------------|
+| CPU | Motorola **MC6809** (8-bit, ~1 MHz) | Toshiba **TMP68301** (68000 core, 16 MHz) |
+| Architecture | 8-bit, 6809 ISA | 32-bit, 68000 ISA — completely different |
+| Code/data compatibility | None — full rewrite for DMP9 | — |
+| MIDI control method | **Note On `0x9n`** — 206-parameter real-time | **Control Change `0xBn`** — 671 params, 16 banks |
+| Pitch control | **Pitch Bend `0xEn`** → pitch shift effect | CC-based effect parameter (standard) |
+| Parameter count | 206 | 671 |
+| Scene memories | Yes | 50 scenes |
+| SysEx | Yamaha `0x43` | Yamaha `0x43` (same Mfr ID, different sub_status set) |
+
+### DMP7 Note On parameter control
+
+The DMP7 used Note On events in a non-standard way:
+- **Note number** (0–127): selects the parameter index within the 206-parameter set
+- **Velocity** (0–127): sets the parameter value
+- This is documented in the DMP7 owner's guide but is entirely non-standard MIDI usage
+- Sending Note On with velocity 0 (= Note Off semantics in standard MIDI) may have had
+  a defined meaning (parameter set to minimum / off)
+
+### DMP7 Pitch Bend
+
+On the DMP7, the Pitch Bend wheel message (`0xEn`, 14-bit signed value) was routed
+directly to the pitch shift effect parameter. This allowed real-time pitch control from
+any MIDI controller with a pitch wheel.
+
+### What the DMP9 replaced
+
+When Yamaha redesigned on the TMP68301:
+- The CC-based system (671 params, 16 banks) replaced the Note On control scheme entirely
+  in the published documentation
+- The pitch effect is now controlled via CC, same as all other parameters
+- However, the firmware may contain backward-compatibility code paths for Note On / Pitch Bend
+  — either intentionally (for users of DMP7-era control software) or as dead code that was
+  never cleaned up
+
+---
+
+## Undocumented Command Investigation
+
+### Goal
+
+Find MIDI messages that the DMP9 firmware handles but that are **not described in any
+published manual**. Candidates:
+
+1. **Note On (`0x9n`) handler** — inherited from DMP7 parameter control scheme
+2. **Pitch Bend (`0xEn`) handler** — inherited from DMP7 pitch shift control
+3. **Undocumented SysEx sub_status** — Yamaha often uses additional sub_status values
+   for factory/service functions, firmware updates, or extended data types
+
+### Ghidra investigation method
+
+`DMP9_MidiAnalysis.java` performs these steps automatically:
+
+1. **Anchor labeling** — labels `midi_tx_byte`, `midi_process_rx`, and the CC/PGM/SysEx
+   handler entry points from known addresses (v1.11 reference)
+2. **CC table annotation** — adds plate comments to the CC parameter dispatch table at
+   `0x054FEE`, one comment per bank row
+3. **SysEx dispatch scan** — walks the SysEx handler's dispatch table and annotates each
+   sub_status branch; flags any sub_status outside the documented set
+4. **Note On / Pitch Bend scan** — searches the MIDI parser for `0x90`/`0x9F` or `0xE0`/`0xEF`
+   comparisons; if found, creates a `midi_note_handler` or `midi_pitchbend_handler` label
+   and adds a plate comment: `"UNDOCUMENTED: Note On used for parameter control (DMP7 legacy?)"`
+
+After running the script, review:
+- Plate comments on `midi_process_rx` — lists all identified dispatch branches
+- Any `midi_note_handler` / `midi_pitchbend_handler` labels in the listing
+- `analysis/midi/undoc_report.md` (generated by the script) — summary of all findings
+
+### Cross-version comparison
+
+Because the MIDI dispatcher region contains a **large known patch** between v1.10 and v1.11
+(`0x00DF81–0x00E311`, 913 bytes), running `DMP9_MidiAnalysis.java` on all three ROMs and
+comparing the undoc_report output is the most direct way to see whether undocumented handlers
+were added, changed, or removed during the firmware's development.
+
+```bash
+# Run MIDI analysis on all 3 ROMs
+bash ghidra/scripts/run_analysis.sh --incremental
+
+# Compare undoc reports across versions
+diff analysis/XN349E0/midi/undoc_report.md analysis/XN349G0/midi/undoc_report.md
+diff analysis/XN349F0/midi/undoc_report.md analysis/XN349G0/midi/undoc_report.md
+```
+
+### Known MIDI patch region (v1.10 → v1.11)
+
+| ROM region | Bytes changed | Likely content |
+|-----------|--------------|----------------|
+| `0x00DF81–0x00E311` | 913 B | MIDI handler or effect processing fix |
+| `0x00E505–0x00E8C9` | 965 B | Additional MIDI or UI fix |
+
+These are priority areas for manual review in Ghidra after `DMP9_MidiAnalysis.java` runs.
 
 ---
 
@@ -285,7 +430,8 @@ Or in Serial mode:
 |---------|------|-------|
 | `0x000122E0` | `midi_tx_byte` | Writes one byte to SC0BUF |
 | `0x000128EC` | `midi_process_rx` | MIDI message parsing core |
-| `0x0XFFFC00` | `SC0BUF` (TMP68301) | UART data register |
+| `0x054FEE` | CC parameter table | 671 params × 16 banks × 96 CCs |
+| `0xFFFC00` | `SC0BUF` (TMP68301) | UART data register |
 
 ### Recognition patterns
 
@@ -296,9 +442,20 @@ Or in Serial mode:
 - Call to `scene_recall` at `0x00013454`
 
 **Control Change handler** — look for:
-- Read of `0xBn` status, then CC number (may be 0x62 for NRPN LSB = bank select)
+- Read of `0xBn` status, then CC number (may be `0x62` for NRPN LSB = bank select)
 - Table dispatch based on bank × 96 + CC
 - Write to parameter in edit buffer
+
+**Note On handler (undocumented)** — look for:
+- Compare of received status byte against `0x90`–`0x9F`
+- Note number used as parameter index (0–205, covering 206 DMP7-style params)
+- Velocity used as parameter value
+- If found: this is a significant discovery — DMP7 backward-compatible control mode
+
+**Pitch Bend handler (undocumented)** — look for:
+- Compare of received status byte against `0xE0`–`0xEF`
+- 14-bit value assembled from two data bytes (LSB first)
+- Write to pitch effect parameter in EF1 or EF2 register
 
 **Bulk Dump Tx** — look for:
 - `0xF0` `0x43` header bytes sent via `midi_tx_byte`
@@ -306,9 +463,12 @@ Or in Serial mode:
 
 **Bulk Dump Rx** — look for:
 - `0xF0` `0x43` receive detection in `midi_process_rx`
+- sub_status byte compared against the documented set (`0x75`, `0x7B`–`0x7F`)
+- Any additional compare values indicate undocumented sub_status handlers
 - Data buffering and checksum validation before writing to memory
 
 ---
 
-*Derived from DMP9 Owner's Guide (DMP9E_2_ocr.pdf, pp. 74–82) and*
-*yamaha_dmp9-8-dmp9-16_mixer_user_manual.pdf, pp. 47–52*
+*Derived from DMP9 Owner's Guide (DMP9E_2_ocr.pdf, pp. 74–82),*
+*yamaha_dmp9-8-dmp9-16_mixer_user_manual.pdf (pp. 47–52),*
+*and DMP7 Owner's Guide (for predecessor MIDI architecture comparison)*

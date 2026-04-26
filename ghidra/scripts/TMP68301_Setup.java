@@ -83,6 +83,25 @@ public class TMP68301_Setup extends GhidraScript {
 
         println("TMP68301_Setup: BASE=0x" + Long.toHexString(BASE) + "  PREFIX=" + PREFIX);
 
+        // Create TMP68301 SFR memory block if not present.
+        // Labels and data definitions cannot be applied to addresses that are
+        // not backed by a memory block — ROM is at 0x000000 and RAM at 0x400000,
+        // so 0xFFFC00–0xFFFFFF would otherwise be unmapped.
+        MemoryBlock sfrBlock = currentProgram.getMemory().getBlock("TMP68301_SFR");
+        if (sfrBlock == null) {
+            try {
+                Address sfrStart = toAddr(0xFFFC00L);
+                sfrBlock = currentProgram.getMemory()
+                        .createUninitializedBlock("TMP68301_SFR", sfrStart, 0x400, false);
+                sfrBlock.setVolatile(true);
+                sfrBlock.setWrite(true);
+                sfrBlock.setRead(true);
+                println("Created TMP68301_SFR memory block at 0xFFFC00-0xFFFFFF");
+            } catch (Exception e) {
+                println("Warning: could not create TMP68301_SFR block: " + e.getMessage());
+            }
+        }
+
         // Build Ghidra data types once
         DataTypeManager dtm = currentProgram.getDataTypeManager();
         DataType byteType  = dtm.getDataType("/byte");

@@ -269,13 +269,23 @@ public class DMP9_FuncFixup extends GhidraScript {
                 try {
                     listing.clearCodeUnits(vtBase, vtBase.add(VECTOR_COUNT * 4L - 1), false);
 
-                    // Prefer the named struct from headers; fall back to Pointer32 array
-                    DataType vtStruct = dtm.getDataType("/M68K_VectorTable");
-                    if (vtStruct == null)
+                    // Prefer the named struct from headers; fall back to Pointer32 array.
+                    // CParserUtils places parsed types under the header file's category
+                    // (e.g. "/dmp9_types.h/M68K_VectorTable"), so a root-path lookup
+                    // misses them — search by name across all categories instead.
+                    java.util.List<DataType> dtResults = new java.util.ArrayList<>();
+                    dtm.findDataTypes("M68K_VectorTable", dtResults);
+                    DataType vtType = dtResults.isEmpty() ? null : dtResults.get(0);
+
+                    DataType vtStruct = vtType;
+                    if (vtStruct == null) {
+                        println("[DMP9_FuncFixup] Pass 1b: M68K_VectorTable struct not found "
+                                + "in DTM — falling back to Pointer32 array.");
                         vtStruct = new ArrayDataType(new Pointer32DataType(), VECTOR_COUNT, 4);
+                    }
 
                     listing.createData(vtBase, vtStruct);
-                    println("[DMP9_FuncFixup] Pass 1b: vector table overlay applied (" 
+                    println("[DMP9_FuncFixup] Pass 1b: vector table overlay applied ("
                             + vtStruct.getName() + ") at 0x000000.");
                 } catch (Exception e) {
                     println("[DMP9_FuncFixup] Pass 1b WARNING: could not apply vector overlay: "

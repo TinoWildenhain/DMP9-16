@@ -71,6 +71,67 @@ Key flags explained:
 | `-fomit-frame-pointer` | Yamaha mixes stack-frame and register-call conventions |
 | `-nostdlib` | No default runtime; we're targeting bare metal |
 
+## MCC68K compiler identification
+
+The original firmware was almost certainly compiled with **Microtec Research MCC68K v4.x** (later acquired by Mentor Graphics). Evidence:
+
+- The section layout in the ROM (`code` → `strings` at 0x050000 → `literals`/`const`) exactly matches MCC68K's documented output format (Ch.8 of the compiler manual)
+- The `strings` section always lands at a clean 0x050000 boundary, consistent with LNK68K's default section ordering
+- `int` behaves as 16-bit throughout (MCC68K default, matches the `mshort` flag)
+- `char` appears to be unsigned (MCC68K default, matches `-funsigned-char`)
+- Function prologues use `LINK A6, #-N` for stack-frame functions — MCC68K always uses A6 as frame pointer
+- Calling conventions: D0-D2/A0-A1 caller-saves, D3-D7/A2-A5 callee-saves — matches MCC68K ABI exactly
+- The runtime library contains `memcpy_b`, `memcpy_w`, `memcpy_l`, `memset` — consistent with MCC68K's libc68k
+- Error/fault strings placed in a separate `fault` section at 0x07FF00 — typical LNK68K scatter file pattern
+
+The [MCC68K v4.3K documentation](https://archive.org/details/microtec-68-k-asm-link-lib) is available on the Internet Archive.
+
+## GCC flag equivalents for MCC68K
+
+| MCC68K default | GCC equivalent | Importance |
+|---|---|---|
+| `int` = 16 bits | `-mshort` | **Critical** — shifts all struct layouts |
+| `char` = unsigned | `-funsigned-char` | High — affects string/byte comparisons |
+| A6 frame pointer | `-fno-omit-frame-pointer` (for `__stdcall`) | Medium |
+| Optimise for space | `-Os` | Medium — instruction selection |
+| No ANSI extensions | `-ffreestanding` | Low |
+| `code`/`strings`/`literals` sections | linker script `.strings 0x050000` | Critical |
+
+## ROM string table (`src/shared/rom_strings.h`)
+
+The 1521 strings in `0x050000–0x059A54` correspond to MCC68K's `strings` section. For the compiled binary to match the ROM, every string must land at exactly the same address.
+
+The approach: a single packed `const struct dmp9_rom_strings` instance (`dmp9_strings`) is placed at 0x050000 via a named linker section. C source files include `rom_strings.h` and reference strings by name:
+
+```c
+#include "rom_strings.h"
+
+// Instead of a bare string literal (which GCC may relocate):
+lcd_write_string(S.lbl_scene_memory);       // → "-Scene Memory-"
+uart_printf(S.fmt_check_sum, crc);          // → "CHECK SUM [%04x]"
+lcd_write_string(S.err_bus_error);          // → "Bus Error"
+
+// For the parameter name table (indexed):
+const char *name = PARAM_NAME_PTR(ctrl_idx); // → "CH 1 Level" etc.
+
+// For effect names:
+const char *eff = EFFECT_HQ_NAME(type_idx); // → "HQ-REV 1 HALL  "
+```
+
+Key format string categories found in the ROM:
+
+| Pattern | Count | Example usage |
+|---|---|---|
+| `%2d` | 34 | Channel numbers, memory numbers |
+| `%1d` | 30 | Single-digit parameters |
+| `%d` | 28 | Generic integers |
+| `%-2d` | 17 | Left-justified channel IDs |
+| `%4.1f` | 11 | Effect parameters (Hz, seconds) |
+| `%c` | 14 | Version char, format chars |
+| `%02x` | 9 | Hex monitor displays |
+| `%5.1f` | 6 | dB values |
+| `%5.2fmsec` | 4 | Delay times |
+
 ## What to expect (and not to expect)
 
 Ghidra's decompiled C is **analysis output**, not source code. The original

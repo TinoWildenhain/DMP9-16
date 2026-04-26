@@ -107,34 +107,111 @@ check_tool "$OBJDUMP"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Linker script — ROM layout matching DMP9/16 memory map
+# Linker script — ROM layout matching DMP9/16 memory map + MCC68K sections
 # ---------------------------------------------------------------------------
-# ROM: 0x000000–0x07FFFF (512 KB flat, loaded by BinaryLoader at base 0)
-# Stack: 0x400000 (DRAM, not in ROM image)
-# The linker script places .text at 0x000000 so addresses match the original.
+#
+# MCC68K (Microtec Research v4.x) produces these CODE-type sections in ROM:
+#   code     — executable code                        → 0x000000–0x04FFFF
+#   strings  — NUL-terminated string literals         → 0x050000
+#   literals — float/int constants, jump tables       → after strings
+#   const    — const-qualified global variables       → after literals
+#   tags     — type tags for structs (rarely used)    → after const
+#
+# DATA-type sections go to RAM (0x400000 DRAM):
+#   vars     — initialised globals (load address = ROM, run address = RAM)
+#   zerovars — BSS (RAM only)
+#   ioports  — volatile hardware regs (not in image)
+#
+# The DMP9/16 address map:
+#   0x000000–0x07FFFF  512KB ROM (flat, BinaryLoader base 0)
+#   0x400000–0x40FFFF  64KB DRAM  (CPU stack + working data)
+#   0x460000           DSP_EF1
+#   0x470000           DSP_EF2
+#   0x490000/1         LCD_CMD / LCD_DATA
+#   0xFFFC00+          TMP68301 SFR
 
 LDSCRIPT="$BUILD_DIR/dmp9.ld"
 cat > "$LDSCRIPT" << 'LD_EOF'
-/* DMP9/16 linker script — flat 68000 ROM, 512KB at 0x000000 */
+/* DMP9/16 linker script — MCC68K section layout, 512KB flat ROM */
 OUTPUT_FORMAT("binary")
-OUTPUT_ARCH(m68k)
+OUTPUT_ARCH(m68k:68000)
 
-ENTRY(_start)
+ENTRY(reset_handler)
+
+MEMORY {
+    ROM  (rx)  : ORIGIN = 0x000000, LENGTH = 512K
+    DRAM (rwx) : ORIGIN = 0x400000, LENGTH = 64K
+}
 
 SECTIONS {
-    . = 0x00000000;
+    /* ── Vector table ── 96 × 4 bytes at ROM base */
+    .vectors 0x000000 : {
+        KEEP(*(.vectors))
+        . = 0x000180;        /* pad to end of vector table */
+    } > ROM
 
+    /* ── Code ── MCC68K "code" section */
     .text : {
-        /* Vector table placeholder — 96 × 4 bytes */
-        . = 0x00000180;   /* 0x180 = end of vector table */
-        *(.text*)
+        *(.text .text.*)
+        . = ALIGN(2);
+    } > ROM
+
+    /* ── String literals ── MCC68K "strings" section, fixed at 0x050000 */
+    .strings 0x050000 : {
+        KEEP(*(.strings))
+        *(.strings.*)
+        . = ALIGN(2);
+    } > ROM
+
+    /* ── Numeric/table literals ── MCC68K "literals" section */
+    /* Placed immediately after .strings; exact address depends on string table size */
+    .literals : {
+        *(.literals .literals.*)
+        *(.rodata .rodata.*)    /* GCC equivalent of literals+const */
+        . = ALIGN(2);
+    } > ROM
+
+    /* ── Const globals ── MCC68K "const" section */
+    .const : {
+        *(.const .const.*)
+        . = ALIGN(2);
+    } > ROM
+
+    /* ── DSP coefficient tables ── binary extract, identical across all 3 ROMs */
+    /* Uncomment and provide dsp_tables.o if/when extracted:
+    .dsp_coeff 0x059B00 : {
+        KEEP(*(.dsp_coeff))
+    } > ROM
+    */
+
+    /* ── Version string ── fixed placement for ROM verification */
+    /* Must land at 0x050617 within the .strings section above */
+    /* The version string is part of the dmp9_strings struct — */
+    /* no separate section needed if the struct is laid out correctly */
+
+    /* ── Fault string ── last page of ROM */
+    .fault 0x07FF00 : {
+        KEEP(*(.fault))
+    } > ROM
+
+    /* ── Initialised variables ── load from ROM, run in DRAM */
+    .data : {
+        _data_start = .;
+        *(.data .data.*)
+        _data_end = .;
+    } > DRAM AT > ROM
+    _data_load = LOADADDR(.data);
+
+    /* ── BSS ── zero-initialised, DRAM only */
+    .bss (NOLOAD) : {
+        _bss_start = .;
+        *(.bss .bss.* COMMON)
+        _bss_end = .;
+    } > DRAM
+
+    /DISCARD/ : {
+        *(.comment) *(.eh_frame) *(.note*) *(.ARM*)
     }
-
-    .rodata : { *(.rodata*) }
-    .data   : { *(.data*)   }
-    .bss    : { *(.bss*)    }
-
-    /DISCARD/ : { *(.comment) *(.eh_frame) *(.note*) }
 }
 LD_EOF
 
@@ -193,14 +270,36 @@ COMPAT_EOF
 # -nostdlib          No startup code or default libraries
 # -Wall -Wno-...     Expect many warnings from Ghidra output
 
+# ---------------------------------------------------------------------------
+# MCC68K compiler flag equivalents for m68k-linux-gnu-gcc
+# ---------------------------------------------------------------------------
+#
+# MCC68K v4.x key defaults (from manual Ch.2/Ch.7/Ch.8):
+#   - int = 16 bits (-mshort)         * CRITICAL for data layout match
+#   - char = unsigned by default      (-funsigned-char)
+#   - structs packed to byte boundary by default (no -fpack-struct needed;
+#     MCC68K aligns fields to their natural size within structs,
+#     but the 68k ABI packs shorts to word boundaries)
+#   - returns: int/short/char in D0, long in D0, ptr in A0
+#   - preserved regs: D3-D7, A2-A5 (caller saves D0-D2, A0-A1)
+#   - frame pointer: A6 (LINK/UNLK) for stack-frame functions
+#   - optimisation: -O1 equivalent; Yamaha likely used -O or -Ospace
+#   - no ANSI extensions by default; -Xa enables ANSI mode
+#
+# The most critical flag for ROM match is -mshort (int=16).  Without it,
+# GCC emits 32-bit int arithmetic which shifts all struct offsets.
+
 CFLAGS=(
-    -m68000
-    -Os
-    -ffreestanding
-    -fno-builtin
-    -fomit-frame-pointer
-    -mshort
-    -nostdlib
+    -m68000              # MC68000 only — no 010/020 extensions
+    -Os                  # Optimise for size (closest to MCC68K -Ospace)
+    -ffreestanding       # No hosted C library
+    -fno-builtin         # Prevent substitution of memcpy/memset etc.
+    -fomit-frame-pointer # MCC68K emits LINK A6 only when it needs a frame;
+                         # Ghidra output mixes framed and unframed, so let GCC decide
+    -mshort              # int = 16 bits  ** MUST MATCH MCC68K default **
+    -funsigned-char      # char = unsigned  (MCC68K default)
+    -nostdlib            # No startup code or default libraries
+    -fno-common          # No COMMON section; force explicit BSS declarations
     -Wall
     -Wno-implicit-function-declaration
     -Wno-int-conversion
@@ -209,8 +308,11 @@ CFLAGS=(
     -Wno-pointer-to-int-cast
     -Wno-int-to-pointer-cast
     -Wno-incompatible-pointer-types
+    -Wno-char-subscripts
     -I"$EXPORT_DIR"
     -I"$BUILD_DIR"
+    -I"$REPO_ROOT/src/shared"
+    -I"$REPO_ROOT/src/hw"
     -include "$COMPAT_H"
 )
 
@@ -221,12 +323,34 @@ echo ""
 COMPILE_LOG="$BUILD_DIR/compile.log"
 COMPILE_OK=0
 
+# Compile rom_strings.c first (defines the const struct at 0x050000)
+ROM_STRINGS_SRC="$REPO_ROOT/src/shared/rom_strings.c"
+ROM_STRINGS_OBJ="$BUILD_DIR/rom_strings.o"
+if [ -f "$ROM_STRINGS_SRC" ]; then
+    echo "  Compiling rom_strings.c..."
+    set +e
+    "$CC" "${CFLAGS[@]}" -c -o "$ROM_STRINGS_OBJ" "$ROM_STRINGS_SRC" 2>&1 | tee "$BUILD_DIR/rom_strings.log"
+    ROM_STRINGS_RC=${PIPESTATUS[0]}
+    set -e
+    if [ $ROM_STRINGS_RC -eq 0 ]; then
+        echo "  rom_strings.o: OK"
+        ROM_STRINGS_LINK="$ROM_STRINGS_OBJ"
+    else
+        echo "  rom_strings.o: FAILED (continuing without it)"
+        ROM_STRINGS_LINK=""
+    fi
+else
+    echo "  (rom_strings.c not found at $ROM_STRINGS_SRC — string placement will not be fixed)"
+    ROM_STRINGS_LINK=""
+fi
+
 # Try to compile — capture errors but don't abort on failure
 set +e
 "$CC" "${CFLAGS[@]}" \
     -T "$LDSCRIPT" \
     -o "$BUILD_DIR/dmp9_decompiled.elf" \
     "$EXPORT_DIR/all_functions.c" \
+    ${ROM_STRINGS_LINK:+"$ROM_STRINGS_LINK"} \
     2>&1 | tee "$COMPILE_LOG"
 COMPILE_RC=${PIPESTATUS[0]}
 set -e

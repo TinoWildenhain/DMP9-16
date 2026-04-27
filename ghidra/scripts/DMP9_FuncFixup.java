@@ -48,6 +48,22 @@ import ghidra.util.exception.InvalidInputException;
 import java.io.File;
 import java.util.*;
 
+/**
+ * DMP9_FuncFixup — Yamaha DMP9/DMP16 primary setup script
+ *
+ * Runs FIRST in the analysis pipeline. Establishes calling conventions,
+ * parses C headers, overlays the M68K_VectorTable struct at 0x000000,
+ * names stub and real ISR functions from the vector table, and force-
+ * disassembles the stub block at 0x400-0x9FF.
+ *
+ * Run order: DMP9_FuncFixup → TMP68301_Setup → DMP9_Board_Setup
+ *            → DMP9_MidiAnalysis → DMP9_LibMatch → DMP9_VersionTrack
+ *
+ * Target: Yamaha DMP9/DMP16, TMP68301AF-16 (68000 @ 16MHz), MCC68K v4.x compiler
+ * Ghidra: 12.0.4+
+ *
+ * See: ghidra/docs/DMP9_FuncFixup.md for full documentation.
+ */
 public class DMP9_FuncFixup extends GhidraScript {
 
     // -----------------------------------------------------------------------
@@ -101,26 +117,49 @@ public class DMP9_FuncFixup extends GhidraScript {
                     "ISR handlers will be tagged 'unknown'.");
         }
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // PASS 1 — Parse C headers (dmp9_types.h, tmp68301_regs.h, shared/*.h)
+        // ─────────────────────────────────────────────────────────────────────────
         // ------------------------------------------------------------------
         // STEP 0: Parse C header files into the program's data type manager
         // ------------------------------------------------------------------
-        // Headers live in ghidra/include/ relative to the script directory.
-        // We resolve the path from the script source file location.
+        // Headers live in ghidra/include/ and src/shared/ relative to the
+        // repo root.  We resolve both from the script source file location:
+        //   <repo>/ghidra/scripts/DMP9_FuncFixup.java
+        //   ↑ getParentFile() = ghidra/scripts
+        //   ↑ getParentFile() = ghidra
+        //   ↑ getParentFile() = <repo>
+        // From <repo>: ghidra/include/  and  src/shared/
+        //
+        // NOTE: Per-version headers (src/<ROMVER>/startup.h, isr.h) are NOT
+        // added here.  They contain version-specific #define address constants
+        // that conflict between v1.02 / v1.10 / v1.11.  The correct file must
+        // be selected at runtime based on ROM version detection.
         File includeDir;
+        File sharedDir;
         try {
             generic.jar.ResourceFile rf = getSourceFile();
             File scriptFile = (rf != null) ? rf.getFile(false) : null;
-            includeDir = (scriptFile != null)
-                ? new File(scriptFile.getParentFile().getParentFile(), "include")
-                : new File(System.getProperty("user.home"), "devel/DMP9-16/ghidra/include");
+            if (scriptFile != null) {
+                File ghidraDir = scriptFile.getParentFile().getParentFile();
+                File repoRoot  = ghidraDir.getParentFile();
+                includeDir = new File(ghidraDir, "include");
+                sharedDir  = new File(repoRoot, "src/shared");
+            } else {
+                includeDir = new File(System.getProperty("user.home"), "devel/DMP9-16/ghidra/include");
+                sharedDir  = new File(System.getProperty("user.home"), "devel/DMP9-16/src/shared");
+            }
         } catch (Exception e) {
             includeDir = new File(System.getProperty("user.home"), "devel/DMP9-16/ghidra/include");
+            sharedDir  = new File(System.getProperty("user.home"), "devel/DMP9-16/src/shared");
         }
 
         String[] headerFiles = {
             new File(includeDir, "tmp68301_regs.h").getAbsolutePath(),
             new File(includeDir, "dmp9_board_regs.h").getAbsolutePath(),
             new File(includeDir, "dmp9_types.h").getAbsolutePath(),
+            new File(sharedDir,  "vectors.h").getAbsolutePath(),
+            new File(sharedDir,  "rom_strings.h").getAbsolutePath(),
         };
 
         // Verify at least one header exists before attempting to parse
@@ -133,7 +172,10 @@ public class DMP9_FuncFixup extends GhidraScript {
             println("[DMP9_FuncFixup] Step 0: parsing C headers from " + includeDir);
             try {
                 DataTypeManager dtm = currentProgram.getDataTypeManager();
-                String[] includePaths = { includeDir.getAbsolutePath() };
+                String[] includePaths = {
+                    includeDir.getAbsolutePath(),
+                    sharedDir.getAbsolutePath(),
+                };
                 String[] parseArgs   = { "-D__GHIDRA__", "-D__68000__" };
                 CParserUtils.parseHeaderFiles(
                     new DataTypeManager[]{ dtm },
@@ -149,6 +191,9 @@ public class DMP9_FuncFixup extends GhidraScript {
                     + includeDir + " — skipping C header import.");
         }
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // PASS 2 — Force-disassemble the ISR stub block at 0x400-0x9FF
+        // ─────────────────────────────────────────────────────────────────────────
         // ------------------------------------------------------------------
         // STEP 0b: Force-disassemble the ISR stub block (0x400–0x9FF)
         // ------------------------------------------------------------------
@@ -180,6 +225,9 @@ public class DMP9_FuncFixup extends GhidraScript {
         Set<Address> vectorFunctions = new HashSet<>();
 
         try {
+            // ─────────────────────────────────────────────────────────────────────
+            // PASS 1 (vector table) — Tag entry-point functions w/ calling convs
+            // ─────────────────────────────────────────────────────────────────────
             // ------------------------------------------------------------------
             // PASS 1: Vector table — create/tag all entry-point functions
             // ------------------------------------------------------------------
@@ -256,6 +304,9 @@ public class DMP9_FuncFixup extends GhidraScript {
                 taggedEntry++;
             }
 
+            // ─────────────────────────────────────────────────────────────────────
+            // PASS 1b — Overlay M68K_VectorTable struct at 0x000000
+            // ─────────────────────────────────────────────────────────────────────
             // ------------------------------------------------------------------
             // PASS 1b: Overlay vector table as Pointer32 array
             // ------------------------------------------------------------------
@@ -293,6 +344,9 @@ public class DMP9_FuncFixup extends GhidraScript {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────────────────
+            // PASS 1c — Name ISR stub / real ISR functions from vector slots
+            // ─────────────────────────────────────────────────────────────────────
             // ------------------------------------------------------------------
             // PASS 1c: Name ISR stub functions (and direct ISRs) from vector slots
             // ------------------------------------------------------------------
@@ -307,6 +361,9 @@ public class DMP9_FuncFixup extends GhidraScript {
                 println("[DMP9_FuncFixup] Pass 1c WARNING: " + e.getMessage());
             }
 
+            // ─────────────────────────────────────────────────────────────────────
+            // PASS 3 — Heuristic prologue scan for all remaining functions
+            // ─────────────────────────────────────────────────────────────────────
             // ------------------------------------------------------------------
             // PASS 2: All other functions — heuristic prologue scan.
             // Skip anything already tagged in Pass 1 (vector entries / ISRs).

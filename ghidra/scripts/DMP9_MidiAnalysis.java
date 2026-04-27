@@ -62,6 +62,22 @@ import ghidra.util.exception.InvalidInputException;
 
 import java.util.*;
 
+/**
+ * DMP9_MidiAnalysis — MIDI subsystem, LCD, serial ISR, and MCC68K library anchor script
+ *
+ * Runs after DMP9_FuncFixup. Anchors function names + signatures for the MIDI
+ * pipeline (rx dispatch, sysex, scene store/recall), the LCD output cluster,
+ * the serial ISRs (SIO0/SIO1), the MCC68K runtime library (memcpy/memset),
+ * and small app-level helpers (delay_simple, delay_nested, write_4D0000).
+ *
+ * Run order: DMP9_FuncFixup → TMP68301_Setup → DMP9_Board_Setup
+ *            → DMP9_MidiAnalysis → DMP9_LibMatch → DMP9_VersionTrack
+ *
+ * Target: Yamaha DMP9/DMP16, TMP68301AF-16 (68000 @ 16MHz), MCC68K v4.x compiler
+ * Ghidra: 12.0.4+
+ *
+ * See: ghidra/docs/DMP9_MidiAnalysis.md for full documentation.
+ */
 public class DMP9_MidiAnalysis extends GhidraScript {
 
     // -----------------------------------------------------------------------
@@ -90,10 +106,15 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         V111_ANCHORS.put("memset_w",            0x000024F2L); // word fill variant
         V111_ANCHORS.put("memset_l",            0x0000250AL); // longword fill variant
 
-        // Init-block helpers (0x274A cluster — confirmed all 3 ROMs)
-        V111_ANCHORS.put("delay_nested",        0x0000274AL); // void(u_int16_t loops) — nested delay
-        V111_ANCHORS.put("delay_simple",        0x00002768L); // void(u_int32_t count) — simple spin delay
-        V111_ANCHORS.put("write_4D0000",        0x00002770L); // void(u_int16_t val) — writes to 0x004D0000
+        // Init-block helpers (v1.11 confirmed — small leaf functions, yamaha_reg)
+        // delay_simple: tight spin loop — no nested call, used as a primitive timing helper.
+        // delay_nested: calls delay_simple in a loop — used for LCD command/data delays.
+        // TODO: v1.02 (XN349E0) and v1.10 (XN349F0) addresses not confirmed.
+        //       Compute from offset delta relative to memcpy_b (0x000023AE) once
+        //       version-specific anchor tables are added.
+        V111_ANCHORS.put("delay_nested",        0x0000274AL); // void delay_nested(int count) — calls delay_simple in a loop
+        V111_ANCHORS.put("delay_simple",        0x00002768L); // void delay_simple(int iterations) — tight loop, no nested call
+        V111_ANCHORS.put("write_4D0000",        0x00002770L); // void write_4D0000(int val) — short I/O write to 0x004D0000
 
         // Serial/UART ISRs (identical addresses in all 3 ROMs — init section, never relocated)
         V111_ANCHORS.put("timer_housekeeping_isr", 0x000006F0L); // vec69 — multi-rate scheduler (base+/5 tick)
@@ -156,15 +177,31 @@ public class DMP9_MidiAnalysis extends GhidraScript {
 
         println("[DMP9_MidiAnalysis] ROM version: " + romVer);
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 1 — Anchor known MIDI / LCD / ISR / library function names
+        // ─────────────────────────────────────────────────────────────────────────
         // -------------------------------------------------------------------
         // Step 1: Anchor known MIDI functions
         // -------------------------------------------------------------------
         Map<String, Function> namedFunctions = anchorMidiFunctions(listing);
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 1b — Apply MCC68K library signatures (stack-based, A1 callee-saved)
+        // ─────────────────────────────────────────────────────────────────────────
         // -------------------------------------------------------------------
         // Step 1b: Apply MCC68K library signatures (stack-based, A1 callee-saved)
         // -------------------------------------------------------------------
         applyLibrarySignatures(namedFunctions);
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 1c — Apply yamaha_reg signatures to small app-level helpers
+        // ─────────────────────────────────────────────────────────────────────────
+        // -------------------------------------------------------------------
+        // Step 1c: Apply yamaha_reg signatures to small app-level helpers.
+        // delay_nested / delay_simple / write_4D0000 are leaf routines used
+        // by LCD timing and I/O paths.  yamaha_reg = single int arg in D0.
+        // -------------------------------------------------------------------
+        applyAppHelperSignatures(namedFunctions);
 
         // -------------------------------------------------------------------
         // Step 2: Annotate SC0 UART register constants
@@ -176,6 +213,9 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // -------------------------------------------------------------------
         annotateMidiStatusBytes(listing, mem, namedFunctions);
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 4 — Analyze MIDI rx dispatch (status byte branches, called funcs)
+        // ─────────────────────────────────────────────────────────────────────────
         // -------------------------------------------------------------------
         // Step 4: Analyze the MIDI receive dispatcher
         // -------------------------------------------------------------------
@@ -196,6 +236,9 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // -------------------------------------------------------------------
         annotateCcParamTable(listing, mem);
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 7 — Scan for undocumented MIDI status handlers (Note On, etc.)
+        // ─────────────────────────────────────────────────────────────────────────
         // -------------------------------------------------------------------
         // Step 7: Scan for undocumented MIDI status handlers
         // -------------------------------------------------------------------
@@ -407,6 +450,48 @@ public class DMP9_MidiAnalysis extends GhidraScript {
                     SourceType.ANALYSIS);
             println("[DMP9_MidiAnalysis] Library signature set: " + fn.getName()
                     + " (" + CC_LIB + ")");
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set signature for "
+                    + fn.getName() + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Apply yamaha_reg signatures to small app-level helpers
+     * (delay_nested, delay_simple, write_4D0000).  Falls back silently if the
+     * yamaha_reg convention is not present in the cspec.
+     */
+    private static final String CC_APP = "yamaha_reg";
+
+    private void applyAppHelperSignatures(Map<String, Function> anchors) {
+        // void delay_simple(int iterations) — tight spin loop
+        setAppSignature(anchors.get("delay_simple"), "void",
+                new String[][]{{"int","iterations"}});
+        // void delay_nested(int count) — calls delay_simple in a loop
+        setAppSignature(anchors.get("delay_nested"), "void",
+                new String[][]{{"int","count"}});
+        // void write_4D0000(int val) — short I/O write helper
+        setAppSignature(anchors.get("write_4D0000"), "void",
+                new String[][]{{"int","val"}});
+    }
+
+    private void setAppSignature(Function fn, String retType, String[][] params) {
+        if (fn == null) return;
+        try {
+            DataType returnDT = libType(retType);
+            List<ParameterImpl> paramList = new ArrayList<>();
+            for (String[] p : params) {
+                paramList.add(new ParameterImpl(p[1], libType(p[0]), currentProgram));
+            }
+            fn.updateFunction(
+                    CC_APP,
+                    new ReturnParameterImpl(returnDT, currentProgram),
+                    paramList,
+                    FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                    true,
+                    SourceType.ANALYSIS);
+            println("[DMP9_MidiAnalysis] App signature set: " + fn.getName()
+                    + " (" + CC_APP + ")");
         } catch (Exception e) {
             println("[DMP9_MidiAnalysis] WARN: could not set signature for "
                     + fn.getName() + ": " + e.getMessage());

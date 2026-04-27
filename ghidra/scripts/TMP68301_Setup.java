@@ -36,6 +36,23 @@ import ghidra.program.model.symbol.*;
 import ghidra.util.exception.*;
 // Ghidra 11.x: CommentType replaces deprecated CodeUnit.{PLATE,EOL,PRE}_COMMENT int constants
 
+/**
+ * TMP68301_Setup — Maps Toshiba TMP68301 SFR block into the Ghidra address space
+ *
+ * Creates a volatile uninitialized memory block at 0xFFFC00-0xFFFFFF, then
+ * labels and types every TMP68301 register: address decoder, interrupt
+ * controller, parallel I/O, serial channels (SIO0/1/2), and 16-bit timers.
+ * Bit-field structures (IRQ_REG, SMR, SCMR, SSR, TCR) are added to the DTM
+ * so Ghidra renders register accesses with named bits in the decompiler.
+ *
+ * Run order: DMP9_FuncFixup → TMP68301_Setup → DMP9_Board_Setup
+ *            → DMP9_MidiAnalysis → DMP9_LibMatch → DMP9_VersionTrack
+ *
+ * Target: Yamaha DMP9/DMP16, TMP68301AF-16 (68000 @ 16MHz), MCC68K v4.x compiler
+ * Ghidra: 12.0.4+
+ *
+ * See: ghidra/docs/TMP68301_Setup.md for full documentation.
+ */
 public class TMP68301_Setup extends GhidraScript {
 
     // -------------------------------------------------------------------------

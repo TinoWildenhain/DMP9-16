@@ -62,6 +62,23 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 
+/**
+ * DMP9_VersionTrack — Cross-ROM name propagation by byte-pattern matching
+ *
+ * Reads function names + signatures from the canonical ROM (v1.11 = XN349G0)
+ * and finds the same functions in the target ROM (v1.02 / v1.10) by matching
+ * the first SIGNATURE_BYTES bytes of each function body. Skips ISR stubs
+ * (named by DMP9_FuncFixup) and very short prologues. Produces a Markdown +
+ * JSON diff report under ~/dmp9_export/<target>/version_track/.
+ *
+ * Run order: DMP9_FuncFixup → TMP68301_Setup → DMP9_Board_Setup
+ *            → DMP9_MidiAnalysis → DMP9_LibMatch → DMP9_VersionTrack
+ *
+ * Target: Yamaha DMP9/DMP16, TMP68301AF-16 (68000 @ 16MHz), MCC68K v4.x compiler
+ * Ghidra: 12.0.4+
+ *
+ * See: ghidra/docs/DMP9_VersionTrack.md for full documentation.
+ */
 public class DMP9_VersionTrack extends GhidraScript {
 
     // -----------------------------------------------------------------------

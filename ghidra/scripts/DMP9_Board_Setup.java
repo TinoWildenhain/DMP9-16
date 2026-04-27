@@ -60,6 +60,23 @@ import ghidra.program.model.scalar.*;
 import ghidra.program.model.symbol.*;
 import ghidra.util.exception.*;
 
+/**
+ * DMP9_Board_Setup — Labels Yamaha DMP9/DMP16 board-level peripherals
+ *
+ * Annotates the off-chip hardware mapped outside the TMP68301 SFR space:
+ * shared DRAM at 0x400000 (CPU stack + DSP delay buffer), DSP effects
+ * blocks EF1/EF2 at 0x460000/0x470000, and the HD44780 LCD controller at
+ * 0x490000/0x490001. Also labels SIO ring-buffer variables, LCD shadow
+ * RAM, and decodes constant LCD_CMD writes to readable HD44780 commands.
+ *
+ * Run order: DMP9_FuncFixup → TMP68301_Setup → DMP9_Board_Setup
+ *            → DMP9_MidiAnalysis → DMP9_LibMatch → DMP9_VersionTrack
+ *
+ * Target: Yamaha DMP9/DMP16, TMP68301AF-16 (68000 @ 16MHz), MCC68K v4.x compiler
+ * Ghidra: 12.0.4+
+ *
+ * See: ghidra/docs/DMP9_Board_Setup.md for full documentation.
+ */
 public class DMP9_Board_Setup extends GhidraScript {
 
     // -------------------------------------------------------------------------

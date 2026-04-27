@@ -73,55 +73,62 @@ typedef struct {
 /* ----------------------------------------------------------------
  * M68K / TMP68301 exception vector table
  * Base address: 0x00000000, size = 96 × 4 = 0x180 bytes
- * Each entry is a 32-bit absolute function pointer.
+ *
+ * Slot 0 (initial_ssp) is a 32-bit raw stack address — NOT a code pointer.
+ * Slots 1..95 are 32-bit function pointers.  Typing them as a function
+ * pointer (void (*)(void)) makes Ghidra resolve each slot to the symbol
+ * of the function it points to instead of showing a raw hex value.
+ *
  * Entries 64–79 are TMP68301 MFP vectors (base = IVNR, typically 0x40).
  * ---------------------------------------------------------------- */
-typedef unsigned int isr_ptr;   /* 32-bit function pointer for Ghidra parser */
+/* Use local names to avoid clashing with <stdint.h> via shared headers. */
+typedef unsigned int  vector_word_t;   /* 32-bit raw stack address (initial SSP)        */
+typedef void (*isr_func_t)(void);      /* 32-bit code pointer — Ghidra resolves to symbol */
 
 typedef struct {
-    isr_ptr initial_ssp;          /* [0]  Initial Supervisor Stack Pointer */
-    isr_ptr initial_pc;           /* [1]  Reset entry point                */
-    isr_ptr bus_error;            /* [2]  */
-    isr_ptr address_error;        /* [3]  */
-    isr_ptr illegal_insn;         /* [4]  */
-    isr_ptr zero_divide;          /* [5]  */
-    isr_ptr chk_insn;             /* [6]  */
-    isr_ptr trapv_insn;           /* [7]  */
-    isr_ptr privilege_violation;  /* [8]  */
-    isr_ptr trace;                /* [9]  */
-    isr_ptr line_a_emulator;      /* [10] Line-A emulator */
-    isr_ptr line_f_emulator;      /* [11] Line-F emulator */
-    isr_ptr reserved_12_23[12];   /* [12-23] reserved */
-    isr_ptr spurious_irq;         /* [24] */
-    isr_ptr autovector_l1;        /* [25] Level 1 IRQ autovector */
-    isr_ptr autovector_l2;        /* [26] Level 2 IRQ autovector */
-    isr_ptr autovector_l3;        /* [27] Level 3 IRQ autovector */
-    isr_ptr autovector_l4;        /* [28] Level 4 IRQ autovector */
-    isr_ptr autovector_l5;        /* [29] Level 5 IRQ autovector */
-    isr_ptr autovector_l6;        /* [30] Level 6 IRQ autovector */
-    isr_ptr autovector_l7;        /* [31] Level 7 NMI */
-    isr_ptr trap_handlers[16];    /* [32-47] TRAP #0–15 */
-    isr_ptr fp_reserved[8];       /* [48-55] FP exceptions (unused) */
-    isr_ptr mmu_reserved[4];      /* [56-59] MMU exceptions (unused) */
-    isr_ptr reserved_60_63[4];    /* [60-63] reserved */
+    vector_word_t initial_ssp;       /* [0]  Initial Supervisor Stack Pointer (raw value) */
+    isr_func_t initial_pc;           /* [1]  Reset entry point                */
+    isr_func_t bus_error;            /* [2]  */
+    isr_func_t address_error;        /* [3]  */
+    isr_func_t illegal_insn;         /* [4]  */
+    isr_func_t zero_divide;          /* [5]  */
+    isr_func_t chk_insn;             /* [6]  */
+    isr_func_t trapv_insn;           /* [7]  */
+    isr_func_t privilege_violation;  /* [8]  */
+    isr_func_t trace;                /* [9]  */
+    isr_func_t line_a_emulator;      /* [10] Line-A emulator */
+    isr_func_t line_f_emulator;      /* [11] Line-F emulator */
+    isr_func_t reserved_12_23[12];   /* [12-23] reserved */
+    isr_func_t spurious_irq;         /* [24] */
+    isr_func_t autovector_l1;        /* [25] Level 1 IRQ autovector */
+    isr_func_t autovector_l2;        /* [26] Level 2 IRQ autovector */
+    isr_func_t autovector_l3;        /* [27] Level 3 IRQ autovector */
+    isr_func_t autovector_l4;        /* [28] Level 4 IRQ autovector */
+    isr_func_t autovector_l5;        /* [29] Level 5 IRQ autovector */
+    isr_func_t autovector_l6;        /* [30] Level 6 IRQ autovector */
+    isr_func_t autovector_l7;        /* [31] Level 7 NMI */
+    isr_func_t trap_handlers[16];    /* [32-47] TRAP #0–15 */
+    isr_func_t fp_reserved[8];       /* [48-55] FP exceptions (unused) */
+    isr_func_t mmu_reserved[4];      /* [56-59] MMU exceptions (unused) */
+    isr_func_t reserved_60_63[4];    /* [60-63] reserved */
     /* [64-79] TMP68301 MFP vectors (IVNR base = 0x40 → vec 64 = index 64) */
-    isr_ptr mfp_vec64;            /* [64] Timer D */
-    isr_ptr mfp_vec65;            /* [65] Timer C */
-    isr_ptr mfp_vec66;            /* [66] GPIO 0 */
-    isr_ptr mfp_vec67;            /* [67] GPIO 1 */
-    isr_ptr mfp_vec68;            /* [68] SIO0 error */
-    isr_ptr mfp_vec69_timer_isr;  /* [69] Timer housekeeping ISR (0x6F0) */
-    isr_ptr mfp_vec70;            /* [70] SIO0 special */
-    isr_ptr mfp_vec71;            /* [71] SIO0 Tx */
-    isr_ptr mfp_vec72_sio0_stat;  /* [72] SIO0 status / cause decode (0x7AE) */
-    isr_ptr mfp_vec73_sio0_rx;    /* [73] SIO0 MIDI Rx ring buffer (0x7EC) */
-    isr_ptr mfp_vec74_sio0_tx;    /* [74] SIO0 Tx feeder (0x836) */
-    isr_ptr mfp_vec75_sio0_spc;   /* [75] SIO0 special/error (0x88A) */
-    isr_ptr mfp_vec76_sio1_stat;  /* [76] SIO1 status / cause decode (0x8B4) */
-    isr_ptr mfp_vec77_sio1_rx;    /* [77] SIO1 Rx ring buffer (0x8F2) */
-    isr_ptr mfp_vec78_sio1_tx;    /* [78] SIO1 Tx feeder (0x93C) */
-    isr_ptr mfp_vec79_sio1_spc;   /* [79] SIO1 special/error (0x990) */
-    isr_ptr user_vecs[16];        /* [80-95] remaining user / TMP68301 vectors */
+    isr_func_t mfp_vec64;            /* [64] Timer D */
+    isr_func_t mfp_vec65;            /* [65] Timer C */
+    isr_func_t mfp_vec66;            /* [66] GPIO 0 */
+    isr_func_t mfp_vec67;            /* [67] GPIO 1 */
+    isr_func_t mfp_vec68;            /* [68] SIO0 error */
+    isr_func_t timer_housekeeping_isr; /* [69] Timer housekeeping ISR (0x6F0) */
+    isr_func_t mfp_vec70;            /* [70] SIO0 special */
+    isr_func_t mfp_vec71;            /* [71] SIO0 Tx */
+    isr_func_t serial0_status_isr;   /* [72] SIO0 status / cause decode (0x7AE) */
+    isr_func_t serial0_rx_isr;       /* [73] SIO0 MIDI Rx ring buffer (0x7EC) */
+    isr_func_t serial0_tx_isr;       /* [74] SIO0 Tx feeder (0x836) */
+    isr_func_t serial0_special_isr;  /* [75] SIO0 special/error (0x88A) */
+    isr_func_t serial1_status_isr;   /* [76] SIO1 status / cause decode (0x8B4) */
+    isr_func_t serial1_rx_isr;       /* [77] SIO1 Rx ring buffer (0x8F2) */
+    isr_func_t serial1_tx_isr;       /* [78] SIO1 Tx feeder (0x93C) */
+    isr_func_t serial1_special_isr;  /* [79] SIO1 special/error (0x990) */
+    isr_func_t mfp_vec80_95[16];     /* [80-95] remaining user / TMP68301 vectors */
 } M68K_VectorTable;
 
 /* ----------------------------------------------------------------

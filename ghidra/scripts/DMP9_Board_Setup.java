@@ -105,6 +105,9 @@ public class DMP9_Board_Setup extends GhidraScript {
         // 1. Annotate shared DRAM block (CPU stack + DSP delay buffer)
         annotateSharedDRAM();
 
+        // 1b. Name typed DRAM variables (scene state, MIDI ring buffers)
+        nameDramVariables();
+
         // 2. Annotate DSP EF1 and EF2
         annotateDSP(byteType);
 
@@ -260,6 +263,57 @@ public class DMP9_Board_Setup extends GhidraScript {
         labelRamVar(0x00409FBEL, "sio1_tx_buf_start",  "SIO1 Tx ring buffer start (0x600 bytes).");
         labelRamVar(0x0040A5BEL, "sio1_tx_buf_end",    "SIO1 Tx ring buffer end.");
         labelRamVar(0x0040A5C2L, "sio1_tx_rd_ptr",     "SIO1 Tx ring buffer read pointer.");
+    }
+
+    // =========================================================================
+    // DRAM variable naming pass
+    //
+    // Creates typed labels in SHARED_DRAM (0x400000-0x40FFFF) for variables
+    // identified by static analysis but not yet named.  The SHARED_DRAM block
+    // is created by annotateSharedDRAM() above; this pass only adds labels
+    // and applies data types — it does not create memory blocks.
+    //
+    // Scene state vars come from disassembly of scene_recall:
+    //   0x40042C..0x40042E  live (current) panel state
+    //   0x40BD86..0x40BD88  shadow copy compared against on recall
+    // =========================================================================
+    private void nameDramVariables() {
+        // Scene control state (live + shadow copy)
+        nameDramVar(absAddr(0x40042CL), "scene_cur_flags",     ByteDataType.dataType);
+        nameDramVar(absAddr(0x40042DL), "scene_cur_param_b",   ByteDataType.dataType);
+        nameDramVar(absAddr(0x40042EL), "scene_cur_param_c",   ByteDataType.dataType);
+        nameDramVar(absAddr(0x40BD86L), "scene_shadow_flags",  ByteDataType.dataType);
+        nameDramVar(absAddr(0x40BD87L), "scene_shadow_param_b",ByteDataType.dataType);
+        nameDramVar(absAddr(0x40BD88L), "scene_shadow_param_c",ByteDataType.dataType);
+
+        // DRAM base + MIDI ring-buffer head/tail pointers (top of 64 KB DRAM)
+        nameDramVar(absAddr(0x400000L), "dram_base",           null);
+        nameDramVar(absAddr(0x40FFE0L), "midi_tx_ring_head",   DWordDataType.dataType);
+        nameDramVar(absAddr(0x40FFE4L), "midi_tx_ring_tail",   DWordDataType.dataType);
+        nameDramVar(absAddr(0x40FFE8L), "midi_rx_ring_head",   DWordDataType.dataType);
+        nameDramVar(absAddr(0x40FFECL), "midi_rx_ring_tail",   DWordDataType.dataType);
+    }
+
+    /**
+     * Create a named, typed label at a DRAM address.  Removes any existing
+     * auto-generated DAT_ symbol first so the new name becomes primary.
+     */
+    private void nameDramVar(Address addr, String name, DataType dt) {
+        try {
+            SymbolTable st = currentProgram.getSymbolTable();
+            Symbol existing = st.getPrimarySymbol(addr);
+            if (existing != null && existing.getName().startsWith("DAT_")) {
+                existing.delete();
+            }
+            st.createLabel(addr, name, SourceType.ANALYSIS);
+            if (dt != null) {
+                Listing listing = currentProgram.getListing();
+                listing.clearCodeUnits(addr, addr.add(dt.getLength() - 1L), false);
+                listing.createData(addr, dt);
+            }
+        } catch (Exception e) {
+            println("Warning: could not label " + name + " @ " + addr + ": " + e.getMessage());
+        }
     }
 
     /** Create a label + plate comment at a RAM variable address in SHARED_DRAM. */

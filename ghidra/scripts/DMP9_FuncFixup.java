@@ -41,6 +41,7 @@ import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.listing.Function.FunctionUpdateType;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.mem.*;
 import ghidra.util.exception.InvalidInputException;
@@ -385,20 +386,43 @@ public class DMP9_FuncFixup extends GhidraScript {
                     continue;
                 }
 
-                boolean hasStackFrame = hasPrologue(listing, entry);
+                String detectedCC = detectCallingConvention(func);
 
-                if (hasStackFrame) {
-                    // Standard stack-based — leave as __stdcall (Ghidra default)
-                    taggedStack++;
-                } else {
-                    // No stack frame = register-based
-                    try {
+                try {
+                    if (CC_DEFAULT.equals(detectedCC)) {
+                        // LINK A6 / MOVEM,-(SP) prologue → standard stack-frame __stdcall
+                        func.setCallingConvention(CC_DEFAULT);
+                        taggedStack++;
+                    } else if ("mcc68k_lib".equals(detectedCC)) {
+                        // MOVE.L A1,-(SP) prologue — library pass will refine the
+                        // signature; just tag the convention here so the decompiler
+                        // gets sensible parameter storage immediately.
+                        func.setCallingConvention("mcc68k_lib");
+                        taggedStack++;
+                    } else {
+                        // Register-based
                         func.setCallingConvention(regCC != null ? CC_REG : CC_UNKNOWN);
                         taggedReg++;
-                    } catch (InvalidInputException e) {
-                        skipped++;
                     }
+                } catch (InvalidInputException e) {
+                    skipped++;
                 }
+            }
+
+            // Reset handler: void(void), __stdcall (it's the entry point — no args).
+            try {
+                Function resetFn = findFunctionByName("reset_handler");
+                if (resetFn != null) {
+                    resetFn.setCallingConvention(CC_DEFAULT);
+                    resetFn.replaceParameters(Collections.emptyList(),
+                        FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                        true, SourceType.ANALYSIS);
+                    resetFn.setReturnType(VoidDataType.dataType, SourceType.ANALYSIS);
+                    println("[DMP9_FuncFixup]   reset_handler: __stdcall void(void)");
+                }
+            } catch (Exception e) {
+                println("[DMP9_FuncFixup] WARN: could not finalise reset_handler signature: "
+                        + e.getMessage());
             }
 
             ok = true;
@@ -626,7 +650,49 @@ public class DMP9_FuncFixup extends GhidraScript {
     }
 
     // -----------------------------------------------------------------------
-    // Heuristic prologue detector
+    // Calling-convention classifier (single-instruction inspection).
+    //
+    // Distinguishes the three application-level conventions in DMP9/16
+    // firmware:
+    //   __stdcall    — first insn = LINK A6,#N  or  MOVEM.L Rs,-(SP)
+    //   mcc68k_lib   — first insn = MOVE.L A1,-(SP)  (compiler runtime)
+    //   yamaha_reg   — anything else (register-based leaf / utility)
+    //
+    // ISRs (RTE) and thunks are filtered upstream by the caller.
+    // -----------------------------------------------------------------------
+    private String detectCallingConvention(Function fn) {
+        Address entry = fn.getEntryPoint();
+        Listing listing = currentProgram.getListing();
+        Instruction instr1 = listing.getInstructionAt(entry);
+        if (instr1 == null) return CC_REG;
+
+        String mnem1 = instr1.getMnemonicString().toLowerCase();
+        String repr  = instr1.toString();
+
+        if (mnem1.equals("link")) return CC_DEFAULT;
+
+        if (mnem1.startsWith("movem") && repr.contains("-(SP)")) return CC_DEFAULT;
+
+        if (mnem1.equals("move") && repr.contains("A1") && repr.contains("-(SP)")) {
+            return "mcc68k_lib";
+        }
+
+        return CC_REG;
+    }
+
+    // Find a function anywhere in the program by exact name. Used for the
+    // reset_handler post-fixup (signature/CC) — the name is set by Pass 1c.
+    private Function findFunctionByName(String name) {
+        FunctionIterator it = currentProgram.getFunctionManager().getFunctions(true);
+        while (it.hasNext()) {
+            Function f = it.next();
+            if (name.equals(f.getName())) return f;
+        }
+        return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Heuristic prologue detector (legacy — retained for reference).
     //
     // Returns true if the function looks like it has a standard stack frame:
     //   - LINK A6,#N   (sets up frame pointer)

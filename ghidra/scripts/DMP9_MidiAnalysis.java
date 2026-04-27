@@ -203,6 +203,14 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // -------------------------------------------------------------------
         applyAppHelperSignatures(namedFunctions);
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 1d — Apply __stdcall void(void) to LINK-frame anchor functions
+        // ─────────────────────────────────────────────────────────────────────────
+        // scene_recall / scene_store / midi_process_rx all start with LINK A6
+        // and read all data from absolute addresses (no D0/D1 reads in the
+        // prologue).  They take no parameters and return no meaningful value.
+        applyStdcallVoidSignatures(namedFunctions);
+
         // -------------------------------------------------------------------
         // Step 2: Annotate SC0 UART register constants
         // -------------------------------------------------------------------
@@ -494,6 +502,54 @@ public class DMP9_MidiAnalysis extends GhidraScript {
                     + " (" + CC_APP + ")");
         } catch (Exception e) {
             println("[DMP9_MidiAnalysis] WARN: could not set signature for "
+                    + fn.getName() + ": " + e.getMessage());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 1d: __stdcall void(void) for anchor functions whose disassembly
+    // confirms a LINK A6 prologue with no register-arg reads.
+    //
+    // scene_recall / scene_store always satisfy this (verified manually).
+    // midi_process_rx is checked at runtime — applied only if its first
+    // instruction is LINK.
+    // -----------------------------------------------------------------------
+    private static final String CC_STDCALL = "__stdcall";
+
+    private void applyStdcallVoidSignatures(Map<String, Function> anchors) {
+        setStdcallVoidVoid(anchors.get("scene_recall"));
+        setStdcallVoidVoid(anchors.get("scene_store"));
+
+        // midi_process_rx — only if it has a LINK A6 prologue (it's a full
+        // state machine, almost certainly stack-framed, but verify before
+        // overwriting any prior heuristic).
+        Function rx = anchors.get("midi_process_rx");
+        if (rx != null && hasLinkPrologue(rx)) {
+            setStdcallVoidVoid(rx);
+        }
+    }
+
+    private boolean hasLinkPrologue(Function fn) {
+        try {
+            Instruction insn = currentProgram.getListing()
+                    .getInstructionAt(fn.getEntryPoint());
+            return insn != null && insn.getMnemonicString().equalsIgnoreCase("link");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void setStdcallVoidVoid(Function fn) {
+        if (fn == null) return;
+        try {
+            fn.setCallingConvention(CC_STDCALL);
+            fn.replaceParameters(Collections.emptyList(),
+                    FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                    true, SourceType.ANALYSIS);
+            fn.setReturnType(VoidDataType.dataType, SourceType.ANALYSIS);
+            println("[DMP9_MidiAnalysis] " + fn.getName() + " → __stdcall void(void)");
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set __stdcall void(void) on "
                     + fn.getName() + ": " + e.getMessage());
         }
     }

@@ -93,6 +93,10 @@
 #define LCD_CMD             (*(volatile uint8_t *)LCD_CMD_ADDR)
 #define LCD_DATA            (*(volatile uint8_t *)LCD_DATA_ADDR)
 
+/* LCD combined control port — bit 8 = E (Enable strobe), bits 9-0 = data+RS+RW.
+ * Exact bit layout TBD from hardware tracing. Accessed as word. */
+#define LCD_CTRL    0x004A0000
+
 /* ==========================================================================
  * Key matrix — front panel buttons
  * Chip enable: PLD-TM2 /KOC output

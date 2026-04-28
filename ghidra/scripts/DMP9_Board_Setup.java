@@ -84,6 +84,7 @@ public class DMP9_Board_Setup extends GhidraScript {
     // -------------------------------------------------------------------------
     private static final long LCD_CMD_ADDR      = 0x490000L;
     private static final long LCD_DATA_ADDR     = 0x490001L;
+    private static final long LCD_CTRL_ADDR     = 0x4A0000L;  // word; bit 8 = E strobe
     private static final long DSP_EF1_BASE_ADDR = 0x460000L;
     private static final long DSP_EF2_BASE_ADDR = 0x470000L;
     private static final long DSP_DRAM_BASE     = 0x400000L;  // IC35/IC36 — shared CPU+DSP DRAM
@@ -292,6 +293,21 @@ public class DMP9_Board_Setup extends GhidraScript {
         nameDramVar(absAddr(0x40FFE4L), "midi_tx_ring_tail",   DWordDataType.dataType);
         nameDramVar(absAddr(0x40FFE8L), "midi_rx_ring_head",   DWordDataType.dataType);
         nameDramVar(absAddr(0x40FFECL), "midi_rx_ring_tail",   DWordDataType.dataType);
+
+        // ROM model param tables (labels only — already in ROM block, no memory
+        // block creation needed).  Selected by hw_model_init based on
+        // hw_model_detect's return value.
+        try {
+            SymbolTable st = currentProgram.getSymbolTable();
+            st.createLabel(absAddr(0x5052EL), "model_params_dmp9",  SourceType.ANALYSIS);
+            st.createLabel(absAddr(0x505B6L), "model_params_dmp16", SourceType.ANALYSIS);
+        } catch (Exception e) {
+            println("Warning: could not label model param tables: " + e.getMessage());
+        }
+
+        // DRAM destination for the active model params (copied by hw_model_init)
+        nameDramVar(absAddr(0x407500L), "model_params_active",
+                new ArrayDataType(ByteDataType.dataType, 0x88, 1));
     }
 
     /**
@@ -426,6 +442,25 @@ public class DMP9_Board_Setup extends GhidraScript {
                 "HD44780 DATA register — write char to DDRAM/CGRAM, read back");
 
         applyByteType(absAddr(LCD_DATA_ADDR), bt);
+
+        // LCD_CTRL (0x4A0000) — combined word-wide control port used by lcd_strobe
+        // for the E-strobe sequence.  Address decoding is by external logic; the
+        // port is not physically inside any existing memory block, so create a
+        // 2-byte volatile uninitialized block here (similar to how
+        // TMP68301_Setup creates the SFR block).
+        Address lcdCtrl = absAddr(LCD_CTRL_ADDR);
+        createMemoryBlockIfAbsent("LCD_HD44780_CTRL", lcdCtrl, 2,
+                "DMP9/DMP16 HD44780 combined control port — word-wide.\n" +
+                "Written by lcd_strobe (0x29C8) to drive the E-strobe sequence.\n" +
+                "  bit 8     = E (Enable strobe)\n" +
+                "  bits 9-0  = data + RS + RW (exact layout TBD from hardware tracing)\n" +
+                "Address decoding by external logic (NOT TMP68301 CS0/CS1).");
+        createLabelWithComments(lcdCtrl, "LCD_CTRL",
+                "HD44780 combined control port (word access).\n" +
+                "bit 8 = E strobe; bits 9-0 = data + RS + RW (layout TBD).\n" +
+                "Used by lcd_strobe to clock commands into the LCD controller.",
+                "HD44780 combined CTRL port — word write");
+        applyWordType(lcdCtrl);
     }
 
 
@@ -598,6 +633,17 @@ public class DMP9_Board_Setup extends GhidraScript {
             listing.createData(a, bt);
         } catch (Exception e) {
             println("  WARN: could not apply byte type at " + a + " (" + e.getMessage() + ")");
+        }
+    }
+
+    /** Apply a word (2-byte) data type at the given address (best-effort). */
+    private void applyWordType(Address a) {
+        Listing listing = currentProgram.getListing();
+        try {
+            listing.clearCodeUnits(a, a.add(1L), false);
+            listing.createData(a, WordDataType.dataType);
+        } catch (Exception e) {
+            println("  WARN: could not apply word type at " + a + " (" + e.getMessage() + ")");
         }
     }
 

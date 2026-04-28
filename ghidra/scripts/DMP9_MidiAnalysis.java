@@ -116,6 +116,21 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         V111_ANCHORS.put("delay_simple",        0x00002768L); // void delay_simple(int iterations) — tight loop, no nested call
         V111_ANCHORS.put("write_4D0000",        0x00002770L); // void write_4D0000(int val) — short I/O write to 0x004D0000
 
+        // LCD init cluster (v1.11 confirmed). yamaha_reg convention; small leaf helpers.
+        // TODO: v1.02 (XN349E0) and v1.10 (XN349F0) addresses not yet confirmed —
+        //       compute deltas relative to lcd_write_cmd (0x0000238C) once the
+        //       version anchor tables exist.
+        V111_ANCHORS.put("lcd_delay_enable",    0x000029BCL); // void(void) — fixed ~8.75µs DBF loop, saves/restores D0
+        V111_ANCHORS.put("lcd_strobe",          0x000029C8L); // void(uint cmd) — D0=cmd, E-strobe sequence to LCD_CTRL
+        V111_ANCHORS.put("lcd_send_init_cmds",  0x000029F2L); // void(void) — sends HD44780 init: 0x38 then 0x08
+        V111_ANCHORS.put("lcd_init_sequence",   0x00002A00L); // void(void) — TODO verify
+
+        // Hardware model detection / init (v1.11). hw_model_init may use either
+        // yamaha_reg or __stdcall depending on whether it has a LINK prologue —
+        // detected at runtime in applyModelInitSignature().
+        V111_ANCHORS.put("hw_model_detect",     0x000029A6L); // uint(void) — 0=DMP9, nonzero=DMP16 in D0
+        V111_ANCHORS.put("hw_model_init",       0x00000F3CL); // void(void) — selects + copies model param table to DRAM
+
         // Serial/UART ISRs (identical addresses in all 3 ROMs — init section, never relocated)
         V111_ANCHORS.put("timer_housekeeping_isr", 0x000006F0L); // vec69 — multi-rate scheduler (base+/5 tick)
         V111_ANCHORS.put("serial0_status_isr",    0x000007AEL); // vec72 — SIO0 4-bit cause decode
@@ -210,6 +225,17 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // and read all data from absolute addresses (no D0/D1 reads in the
         // prologue).  They take no parameters and return no meaningful value.
         applyStdcallVoidSignatures(namedFunctions);
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // STEP 1e — Apply LCD init / hw model signatures
+        // ─────────────────────────────────────────────────────────────────────────
+        // lcd_delay_enable / lcd_send_init_cmds / lcd_init_sequence are
+        // yamaha_reg void(void).  lcd_strobe takes one D0 register parameter.
+        // hw_model_detect returns uint in D0 (yamaha_reg).
+        // hw_model_init uses __stdcall if it has a LINK prologue, else yamaha_reg.
+        applyLcdInitSignatures(namedFunctions);
+        applyModelDetectSignature(namedFunctions);
+        applyModelInitSignature(namedFunctions);
 
         // -------------------------------------------------------------------
         // Step 2: Annotate SC0 UART register constants
@@ -551,6 +577,69 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         } catch (Exception e) {
             println("[DMP9_MidiAnalysis] WARN: could not set __stdcall void(void) on "
                     + fn.getName() + ": " + e.getMessage());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 1e: LCD init cluster + hardware model detect/init signatures
+    // -----------------------------------------------------------------------
+
+    /** Apply yamaha_reg void(void) to the LCD init void/void helpers, and the
+     *  one-arg lcd_strobe(cmd) with cmd in D0. */
+    private void applyLcdInitSignatures(Map<String, Function> anchors) {
+        // void(void) helpers
+        setAppSignature(anchors.get("lcd_delay_enable"),   "void", new String[][]{});
+        setAppSignature(anchors.get("lcd_send_init_cmds"), "void", new String[][]{});
+        setAppSignature(anchors.get("lcd_init_sequence"),  "void", new String[][]{});
+
+        // lcd_strobe(uint cmd) — single D0 register parameter
+        Function f = anchors.get("lcd_strobe");
+        if (f == null) return;
+        try {
+            f.setCallingConvention(CC_APP);
+            List<ParameterImpl> params = new ArrayList<>();
+            params.add(new ParameterImpl("cmd", new DWordDataType(),
+                new VariableStorage(currentProgram,
+                    currentProgram.getLanguage().getRegister("D0"), 4),
+                currentProgram));
+            f.replaceParameters(params, FunctionUpdateType.CUSTOM_STORAGE,
+                true, SourceType.ANALYSIS);
+            f.setReturnType(VoidDataType.dataType, SourceType.ANALYSIS);
+            println("[DMP9_MidiAnalysis] lcd_strobe → yamaha_reg void(uint cmd@D0)");
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set lcd_strobe signature: "
+                    + e.getMessage());
+        }
+    }
+
+    /** hw_model_detect: yamaha_reg, returns uint in D0, no params. */
+    private void applyModelDetectSignature(Map<String, Function> anchors) {
+        Function f = anchors.get("hw_model_detect");
+        if (f == null) return;
+        try {
+            f.updateFunction(
+                CC_APP,
+                new ReturnParameterImpl(DWordDataType.dataType, currentProgram),
+                Collections.emptyList(),
+                FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                true,
+                SourceType.ANALYSIS);
+            println("[DMP9_MidiAnalysis] hw_model_detect → yamaha_reg uint(void)");
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set hw_model_detect signature: "
+                    + e.getMessage());
+        }
+    }
+
+    /** hw_model_init: __stdcall void(void) if it begins with LINK A6, otherwise
+     *  yamaha_reg void(void).  Inspects the first instruction at runtime. */
+    private void applyModelInitSignature(Map<String, Function> anchors) {
+        Function f = anchors.get("hw_model_init");
+        if (f == null) return;
+        if (hasLinkPrologue(f)) {
+            setStdcallVoidVoid(f);
+        } else {
+            setAppSignature(f, "void", new String[][]{});
         }
     }
 

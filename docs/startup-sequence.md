@@ -46,18 +46,26 @@ Channel 1 selected and blinking (SEL button + encoder ring flash).
 
 ## Hardware Architecture
 
-### LED Shift Register Chain
-All front-panel LEDs are driven by a **16-bit serial shift register chain**
-clocked via writes to `LED_SR_DATA` (0x4D0000). The function `led_sr_write(uint data)`
-shifts one 16-bit word into the chain per call.
+### LED + 7-Segment Shift Register Chain
 
-Chain order (approximate, pending disassembly confirmation):
-```
-[ch1 enc ring] [ch2 enc ring] ... [ch16 enc ring]  ← 8+ words
-[ch1–16 ON buttons]                                 ← 1 word (16 channels)
-[ch1–16 SEL buttons]                               ← 1 word (16 channels)
-[right panel buttons]                               ← 1–2 words
-```
+The **entire** front panel — all button LEDs, encoder ring LEDs, AND the 7-segment
+display segments — is driven by a single long serial shift register chain via one port:
+
+**`LED_SR_DATA` = 0x4D0000** (16-bit write, function `led_sr_write(uint data)`)
+
+Each write clocks 16 new bits into the chain. The startup self-test confirms the
+unified chain by walking a single '1' bit through every position in sequence:
+encoder rings light individually → ON buttons individually → SEL buttons individually
+→ right panel buttons individually → 7-segment segments individually (visible as
+the `L` / `8.E` / `1.8` test pattern, which are single segments lighting in sequence).
+
+There is **no separate 7-segment port**. Segment control bits are at fixed offsets
+within the shift register chain. The exact bit-position → LED/segment mapping is TBD
+pending disassembly of `led_update()`.
+
+Chain length estimate: encoder rings (~32 bits for 16ch × 2 enc?) + ON buttons (16)
++ SEL buttons (16) + right panel (~16) + 7-segment (8) + other = ~90–120 bits total
+= 6–8 × 16-bit words per full chain refresh.
 
 ### LCD
 - HD44780 controller, 4×16 characters
@@ -65,15 +73,21 @@ Chain order (approximate, pending disassembly confirmation):
 - DATA port: 0x490001 (RS=1)  
 - CTRL port: 0x4A0000 (E+RS+RW combined latch, bit 8 = Enable strobe)
 
-### 7-Segment Display
-- 2 digits, MEMORY section (top-left panel area, scene number)
-- Port address TBD from disassembly
-- Driven separately from shift register chain
-
 ### Model Detection
 `hw_model_detect()` at 0x29A6 reads hardware strap → 0=DMP9 (8ch), nonzero=DMP16 (16ch).
 Result selects parameter table: `model_params_dmp9` (ROM 0x5052E) or `model_params_dmp16`
 (ROM 0x505B6), copied to `model_params_active` (DRAM 0x407500).
+
+## Key Analysis Target: `led_update()`
+
+The most important function to find next. It:
+1. Reads the DRAM LED state buffer (address TBD — likely near 0x407xxx)
+2. Packs LED states into 16-bit shift register words
+3. Calls `led_sr_write()` in a loop to refresh the full chain
+
+**How to find it:** Check xrefs to `led_sr_write` (anchored at 0x2770). The caller
+that uses a loop/counter and writes multiple consecutive words is `led_update()`.
+Once found, the DRAM buffer address and the chain bit→LED mapping become known.
 
 ## Functions to Find (next analysis targets)
 - `led_init()` — initialises shift register, called early in `reset_handler`

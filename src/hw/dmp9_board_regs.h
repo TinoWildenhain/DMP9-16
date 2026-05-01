@@ -97,26 +97,26 @@
  * Exact bit layout TBD from hardware tracing. Accessed as word. */
 #define LCD_CTRL    0x004A0000
 
-/* ─── LED Shift Register Controller ──────────────────────────────────────────
- * 16-bit shift register chain driving all front-panel LEDs.
- * Each write clocks 16 bits into the chain. Groups (in chain order):
- *   Word 0: Encoder ring LEDs ch1-2   (red, around rotary pots)
- *   Word 1: Encoder ring LEDs ch3-4
- *   ...up to ch16 (8 words total for 16 channels × 2 enc per strip)
- *   Then: Channel ON/MUTE buttons (orange)
- *   Then: Channel SEL buttons (green)
- *   Then: Right panel buttons (SCENE MEMORY, SETUP MEMORY, SEND1/2, etc.)
- * Exact chain order TBD from disassembly of led_update() / write_4D0000().
- * All-zero = all LEDs off. Bit=1 = LED on.
+/* ─── LED / 7-Segment Shift Register Chain ────────────────────────────────────
+ * Single long serial shift register chain driving ALL front-panel indicators:
+ *   - Encoder ring LEDs (red, around rotary pots) — ch1–16
+ *   - Channel ON/MUTE button LEDs (orange)
+ *   - Channel SEL button LEDs (green)
+ *   - Right-panel button LEDs (SCENE/SETUP MEMORY, SEND1/2, etc.)
+ *   - 7-segment display segments (a/b/c/d/e/f/g + decimal point = 8 bits)
+ *
+ * All driven via a single port. Each 16-bit write clocks 16 bits into the chain.
+ * Self-test: walks a single '1' bit from position 0 to N (full chain length),
+ * lighting exactly one LED/segment at a time.
+ *
+ * Chain bit positions (TBD from led_update() disassembly):
+ *   Bits 0–?: Encoder ring LEDs (order TBD)
+ *   Bits ?–?: ON/MUTE button LEDs
+ *   Bits ?–?: SEL button LEDs
+ *   Bits ?–?: Right panel button LEDs
+ *   Bits ?–?: 7-segment segments (a, b, c, d, e, f, g, dp)
  */
-#define LED_SR_DATA     0x004D0000   /* LED shift register write port (16-bit) */
-
-/* ─── 7-Segment Display ───────────────────────────────────────────────────────
- * 2-digit 7-segment for MEMORY/scene number display (top-left of front panel).
- * Address TBD — not yet confirmed from disassembly.
- * Self-test sequence: 'L' → '8.E' → '1.8' → scene number
- */
-/* #define SEG7_DATA    0x00xxxxxx */  /* TBD */
+#define LED_SR_DATA     0x004D0000   /* LED+7seg shift register port (16-bit write) */
 
 /* ==========================================================================
  * Key matrix — front panel buttons

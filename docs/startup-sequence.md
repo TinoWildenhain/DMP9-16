@@ -15,30 +15,37 @@ Before LED controller is initialised, firmware writes version string to LCD:
 - Line 3: `Copyright 1994`
 Position: top-left (column 0, row 0). Later scrolled to centre during scene load.
 
-### Phase 3 — Encoder Ring LED Sweep
-Red LEDs around the 8 rotary encoder pots sweep left-to-right in groups of 16 bits.
-Each group write goes to `LED_SR_DATA` (0x4D0000). Sweep covers ch1→ch16 (8 channel strips,
-2 encoders per strip = 16 encoder rings total). Duration: ~200ms.
+### Phase 3–6 — LED Chain Sliding Window Animation (~4–5 seconds)
 
-### Phase 4 — Channel ON/MUTE Button Sweep  
-Orange channel ON/MUTE buttons sweep left-to-right ch1→ch16.
-MASTER encoder ring also lights during this phase.
+A 16-bit wide window of set bits slides continuously through the entire shift
+register chain from the leftmost encoder ring to the rightmost panel element.
+At any instant exactly 16 consecutive LEDs/segments appear lit simultaneously
+(no flicker — the chain is continuously refreshed by `timer_housekeeping_isr`).
 
-### Phase 5 — SEL Button Sweep + Right Panel
-Green channel SEL (select) buttons sweep left-to-right ch1→ch16.
-Simultaneously, right-panel buttons flash:
-- SCENE MEMORY bank (EF1, EF2, SOLO) — pink/magenta
-- SETUP MEMORY bank (UTILITY, DIO, MIDI) — green
-- SEND1, SEND2 select buttons
+The window advances one bit position per ISR tick, snaking left-to-right:
+  encoder rings ch1→16 → ON/MUTE buttons ch1→16 → SEL buttons ch1→16
+  → right panel buttons → 7-segment segments
 
-### Phase 6 — 7-Segment Self-Test
-The 2-digit 7-segment display (MEMORY section, scene number) performs a lamp test:
-- `L` — single segment
-- `8.E` — all segments + decimal point
-- `1.8` — further pattern
-- Counts through segment patterns then goes blank
+**7-segment appearance during animation:** The `L`, `8.E`, `1.8` patterns visible
+in the animation are NOT a deliberate segment test. They are the 16-bit window
+passing through the 8 segment bits in the chain:
+- Window entering: only segment `d` (bottom bar) covered → shows `L`
+- Window fully overlapping all 8 segment bits → shows `8.` (all segments on)
+- Window exiting: trailing partial overlap → shows partial patterns like `1.8`
 
-### Phase 7 — Scene Recall
+**ISR-driven refresh:** `timer_housekeeping_isr` (0x000006F0) clocks the DRAM LED
+state buffer into `LED_SR_DATA` (0x4D0000) at high frequency (~hundreds of Hz).
+The animation code simply advances the window position in the DRAM buffer each tick.
+
+### Phase 7 — DSP Initialisation Pause (~5–6 seconds)
+
+After the LED sweep completes, all LEDs extinguish and the display holds blank
+for 5–6 seconds. This is **DSP program load time**:
+- EF1 DSP (0x460000) and EF2 DSP (0x470000) load their effect programs
+- DSPs stabilise before audio processing can begin
+- Implemented as a timed wait (counter loop or ISR-counted delay) in firmware
+
+### Phase 8 — Scene Recall and Normal Operation
 All LEDs extinguish. Firmware calls `scene_recall()` to load the last stored scene.
 7-segment displays the scene number (e.g. `50.`).
 LCD switches to scene parameter display (4×16 chars, scrolling parameter names).
@@ -48,24 +55,29 @@ Channel 1 selected and blinking (SEL button + encoder ring flash).
 
 ### LED + 7-Segment Shift Register Chain
 
-The **entire** front panel — all button LEDs, encoder ring LEDs, AND the 7-segment
-display segments — is driven by a single long serial shift register chain via one port:
+Single serial shift register chain driving ALL front-panel indicators.
+Port: `LED_SR_DATA` = 0x4D0000, function `led_sr_write(uint data)`.
 
-**`LED_SR_DATA` = 0x4D0000** (16-bit write, function `led_sr_write(uint data)`)
+**Refresh architecture:**
+- `timer_housekeeping_isr` (0x6F0) clocks the DRAM LED state buffer into the
+  chain at high frequency (no flicker at normal viewing distance)
+- DRAM LED buffer: address TBD (find via xrefs to `led_sr_write` in ISR)
+- Normal operation: buffer reflects actual UI state (selected channel, active
+  scenes, parameter values, etc.)
+- Animation: firmware writes a sliding 16-bit all-ones window into the buffer
 
-Each write clocks 16 new bits into the chain. The startup self-test confirms the
-unified chain by walking a single '1' bit through every position in sequence:
-encoder rings light individually → ON buttons individually → SEL buttons individually
-→ right panel buttons individually → 7-segment segments individually (visible as
-the `L` / `8.E` / `1.8` test pattern, which are single segments lighting in sequence).
+**Chain structure (estimated from animation):**
+```
+Position:  0        ~32      ~48       ~64         ~80  ~88
+           |         |        |         |            |    |
+Chain:  [enc rings][ON btns][SEL btns][right panel][7-seg][?]
+        ch1→ch16   ch1→16   ch1→16    ~16 bits     8 bits
+```
+Total chain length: ~90–100 bits = 6–7 × 16-bit words per full refresh.
 
-There is **no separate 7-segment port**. Segment control bits are at fixed offsets
-within the shift register chain. The exact bit-position → LED/segment mapping is TBD
-pending disassembly of `led_update()`.
-
-Chain length estimate: encoder rings (~32 bits for 16ch × 2 enc?) + ON buttons (16)
-+ SEL buttons (16) + right panel (~16) + 7-segment (8) + other = ~90–120 bits total
-= 6–8 × 16-bit words per full chain refresh.
+**Key analysis target:** Find `led_update()` (the ISR's chain-refresh subroutine)
+via xrefs to `led_sr_write`. The loop body and iteration count will confirm the
+exact chain length and DRAM buffer address.
 
 ### LCD
 - HD44780 controller, 4×16 characters

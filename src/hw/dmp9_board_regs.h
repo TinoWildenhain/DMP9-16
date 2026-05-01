@@ -106,8 +106,9 @@
  *   - 7-segment display segments (a/b/c/d/e/f/g + decimal point = 8 bits)
  *
  * All driven via a single port. Each 16-bit write clocks 16 bits into the chain.
- * Self-test: walks a single '1' bit from position 0 to N (full chain length),
- * lighting exactly one LED/segment at a time.
+ * Init animation: slides a 16-bit all-ones window through the full chain
+ * (4-5 sec sweep). Refresh driven by timer_housekeeping_isr at ~hundreds of Hz.
+ * 5-6 sec DSP init pause follows before scene recall.
  *
  * Chain bit positions (TBD from led_update() disassembly):
  *   Bits 0–?: Encoder ring LEDs (order TBD)

@@ -97,6 +97,27 @@
  * Exact bit layout TBD from hardware tracing. Accessed as word. */
 #define LCD_CTRL    0x004A0000
 
+/* ─── LED Shift Register Controller ──────────────────────────────────────────
+ * 16-bit shift register chain driving all front-panel LEDs.
+ * Each write clocks 16 bits into the chain. Groups (in chain order):
+ *   Word 0: Encoder ring LEDs ch1-2   (red, around rotary pots)
+ *   Word 1: Encoder ring LEDs ch3-4
+ *   ...up to ch16 (8 words total for 16 channels × 2 enc per strip)
+ *   Then: Channel ON/MUTE buttons (orange)
+ *   Then: Channel SEL buttons (green)
+ *   Then: Right panel buttons (SCENE MEMORY, SETUP MEMORY, SEND1/2, etc.)
+ * Exact chain order TBD from disassembly of led_update() / write_4D0000().
+ * All-zero = all LEDs off. Bit=1 = LED on.
+ */
+#define LED_SR_DATA     0x004D0000   /* LED shift register write port (16-bit) */
+
+/* ─── 7-Segment Display ───────────────────────────────────────────────────────
+ * 2-digit 7-segment for MEMORY/scene number display (top-left of front panel).
+ * Address TBD — not yet confirmed from disassembly.
+ * Self-test sequence: 'L' → '8.E' → '1.8' → scene number
+ */
+/* #define SEG7_DATA    0x00xxxxxx */  /* TBD */
+
 /* ==========================================================================
  * Key matrix — front panel buttons
  * Chip enable: PLD-TM2 /KOC output

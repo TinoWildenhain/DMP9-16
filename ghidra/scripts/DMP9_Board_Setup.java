@@ -85,6 +85,7 @@ public class DMP9_Board_Setup extends GhidraScript {
     private static final long LCD_CMD_ADDR      = 0x490000L;
     private static final long LCD_DATA_ADDR     = 0x490001L;
     private static final long LCD_CTRL_ADDR     = 0x4A0000L;  // word; bit 8 = E strobe
+    private static final long LED_SR_DATA_ADDR  = 0x4D0000L;  // 16-bit LED shift register data port
     private static final long DSP_EF1_BASE_ADDR = 0x460000L;
     private static final long DSP_EF2_BASE_ADDR = 0x470000L;
     private static final long DSP_DRAM_BASE     = 0x400000L;  // IC35/IC36 — shared CPU+DSP DRAM
@@ -115,6 +116,9 @@ public class DMP9_Board_Setup extends GhidraScript {
         // 3. Annotate LCD registers
         annotateLCD(byteType);
 
+        // 3b. Annotate LED shift register port
+        annotateLED();
+
         // 4. Scan listing for constant writes to LCD_CMD and decode them
         int cmdCount = decodeLcdCommandWrites();
 
@@ -123,6 +127,7 @@ public class DMP9_Board_Setup extends GhidraScript {
                 + "  (IC35/IC36, 64 KB — CPU stack confirmed + DSP delay buffer)");
         println("  LCD_CMD  labelled at 0x" + Long.toHexString(LCD_CMD_ADDR));
         println("  LCD_DATA labelled at 0x" + Long.toHexString(LCD_DATA_ADDR));
+        println("  LED_SR_DATA labelled at 0x" + Long.toHexString(LED_SR_DATA_ADDR));
         println("  DSP_EF1  labelled at 0x" + Long.toHexString(DSP_EF1_BASE_ADDR));
         println("  DSP_EF2  labelled at 0x" + Long.toHexString(DSP_EF2_BASE_ADDR));
         println("  LCD command decode: " + cmdCount + " write sites annotated.");
@@ -461,6 +466,46 @@ public class DMP9_Board_Setup extends GhidraScript {
                 "Used by lcd_strobe to clock commands into the LCD controller.",
                 "HD44780 combined CTRL port — word write");
         applyWordType(lcdCtrl);
+    }
+
+
+    // =========================================================================
+    // LED Shift Register Controller (0x4D0000)
+    //
+    // 16-bit shift register chain driving all front-panel LEDs.  Each write
+    // clocks 16 bits into the chain.  Driven by led_sr_write (formerly
+    // write_4D0000 in DMP9_MidiAnalysis anchor table).
+    //
+    // Chain order (approximate, pending disassembly confirmation):
+    //   - Encoder ring LEDs ch1..ch16 (red, around rotary pots)
+    //   - Channel ON/MUTE buttons (orange)
+    //   - Channel SEL buttons (green)
+    //   - Right panel (SCENE MEMORY, SETUP MEMORY, SEND1/2)
+    // =========================================================================
+    private void annotateLED() throws Exception {
+        Address ledSr = absAddr(LED_SR_DATA_ADDR);
+        createMemoryBlockIfAbsent("LED_SR", ledSr, 2,
+                "DMP9/DMP16 LED shift register data port — 16-bit serial chain.\n" +
+                "Each write clocks 16 bits into a chain that drives all front-panel\n" +
+                "LEDs: encoder rings, channel ON/MUTE, channel SEL, right-panel\n" +
+                "buttons (SCENE MEMORY, SETUP MEMORY, SEND1/2).\n" +
+                "Address decoding by external logic (NOT TMP68301 CS0/CS1).");
+        createLabelWithComments(ledSr, "LED_SR_DATA",
+                "LED shift register data port (word write).\n" +
+                "Driven by led_sr_write — each call shifts a 16-bit word into the chain.\n" +
+                "All-zero clears all LEDs; bit=1 lights an LED.\n" +
+                "\n" +
+                "Chain order (approximate, pending disassembly confirmation):\n" +
+                "  Words 0..7: Encoder ring LEDs ch1..ch16 (2 enc per channel strip)\n" +
+                "  Then:       Channel ON/MUTE buttons (orange)\n" +
+                "  Then:       Channel SEL buttons (green)\n" +
+                "  Then:       Right panel (SCENE MEMORY, SETUP MEMORY, SEND1/2)\n" +
+                "\n" +
+                "Boot self-test (from video frame analysis): sweeps left-to-right\n" +
+                "across encoder rings, then ON buttons, then SEL buttons, then\n" +
+                "right-panel buttons.",
+                "LED shift register — word write, 16-bit chain");
+        applyWordType(ledSr);
     }
 
 

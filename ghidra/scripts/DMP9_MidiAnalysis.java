@@ -68,7 +68,7 @@ import java.util.*;
  * Runs after DMP9_FuncFixup. Anchors function names + signatures for the MIDI
  * pipeline (rx dispatch, sysex, scene store/recall), the LCD output cluster,
  * the serial ISRs (SIO0/SIO1), the MCC68K runtime library (memcpy/memset),
- * and small app-level helpers (delay_simple, delay_nested, write_4D0000).
+ * and small app-level helpers (delay_simple, delay_nested, led_sr_write).
  *
  * Run order: DMP9_FuncFixup → TMP68301_Setup → DMP9_Board_Setup
  *            → DMP9_MidiAnalysis → DMP9_LibMatch → DMP9_VersionTrack
@@ -114,7 +114,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         //       version-specific anchor tables are added.
         V111_ANCHORS.put("delay_nested",        0x0000274AL); // void delay_nested(int count) — calls delay_simple in a loop
         V111_ANCHORS.put("delay_simple",        0x00002768L); // void delay_simple(int iterations) — tight loop, no nested call
-        V111_ANCHORS.put("write_4D0000",        0x00002770L); // void write_4D0000(int val) — short I/O write to 0x004D0000
+        V111_ANCHORS.put("led_sr_write",        0x00002770L); // void led_sr_write(uint data) — clocks 16 bits into LED shift register at LED_SR_DATA (0x4D0000)
 
         // LCD init cluster (v1.11 confirmed). yamaha_reg convention; small leaf helpers.
         // TODO: v1.02 (XN349E0) and v1.10 (XN349F0) addresses not yet confirmed —
@@ -213,7 +213,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // ─────────────────────────────────────────────────────────────────────────
         // -------------------------------------------------------------------
         // Step 1c: Apply yamaha_reg signatures to small app-level helpers.
-        // delay_nested / delay_simple / write_4D0000 are leaf routines used
+        // delay_nested / delay_simple / led_sr_write are leaf routines used
         // by LCD timing and I/O paths.  yamaha_reg = single int arg in D0.
         // -------------------------------------------------------------------
         applyAppHelperSignatures(namedFunctions);
@@ -492,7 +492,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
 
     /**
      * Apply yamaha_reg signatures to small app-level helpers
-     * (delay_nested, delay_simple, write_4D0000).  Falls back silently if the
+     * (delay_nested, delay_simple, led_sr_write).  Falls back silently if the
      * yamaha_reg convention is not present in the cspec.
      */
     private static final String CC_APP = "yamaha_reg";
@@ -504,9 +504,9 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // void delay_nested(int count) — calls delay_simple in a loop
         setAppSignature(anchors.get("delay_nested"), "void",
                 new String[][]{{"int","count"}});
-        // void write_4D0000(int val) — short I/O write helper
-        setAppSignature(anchors.get("write_4D0000"), "void",
-                new String[][]{{"int","val"}});
+        // void led_sr_write(uint data) — clocks 16 bits into LED shift register at LED_SR_DATA (0x4D0000)
+        setAppSignature(anchors.get("led_sr_write"), "void",
+                new String[][]{{"uint","data"}});
     }
 
     private void setAppSignature(Function fn, String retType, String[][] params) {
@@ -654,6 +654,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
             case "dword*": return new PointerDataType(DWordDataType.dataType);
             case "void*":  return new PointerDataType(VoidDataType.dataType);
             case "int":    return DWordDataType.dataType;
+            case "uint":   return DWordDataType.dataType;
             default:       return DWordDataType.dataType;
         }
     }

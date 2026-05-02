@@ -313,6 +313,21 @@ public class DMP9_Board_Setup extends GhidraScript {
         // DRAM destination for the active model params (copied by hw_model_init)
         nameDramVar(absAddr(0x407500L), "model_params_active",
                 new ArrayDataType(ByteDataType.dataType, 0x88, 1));
+
+        // DSP / encoder / EF display state (seen in dsp_display_render_ef
+        // FUN_00016950 and the FUN_00006608 caller cluster).
+        nameDramVar(absAddr(0x40754EL), "dsp_display_mode",     ByteDataType.dataType);
+        nameDramVar(absAddr(0x400400L), "sw_status",            WordDataType.dataType);
+        nameDramVar(absAddr(0x40042AL), "encoder_state",        ByteDataType.dataType);
+        nameDramVar(absAddr(0x40042BL), "encoder_state_b",      ByteDataType.dataType);
+        nameDramVar(absAddr(0x400506L), "selected_effect_slot", ByteDataType.dataType);
+        nameDramVar(absAddr(0x400508L), "effect_param_table",
+                new ArrayDataType(ByteDataType.dataType, 16, 1));
+        nameDramVar(absAddr(0x400518L), "led_state_table",
+                new ArrayDataType(ByteDataType.dataType, 32, 1));
+
+        // Switch/button status word seen in FUN_00006608 (ORI.W #0x80, ANDI.W #0x800).
+        nameDramVar(absAddr(0x40788CL), "sw_status",            WordDataType.dataType);
     }
 
     /**

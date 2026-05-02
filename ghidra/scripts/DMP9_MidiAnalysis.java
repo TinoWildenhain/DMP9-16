@@ -160,6 +160,9 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         V111_ANCHORS.put("lcd_format_str",     0x00007BA6L); // 7 calls  — formatted string display
         V111_ANCHORS.put("lcd_write_padded",   0x0000A09CL); // uses strlen, computes padding
         V111_ANCHORS.put("print_rjust16",      0x0000A6A8L); // 16-char right-justified UART output
+
+        // DSP display (EF1/EF2 parameter rendering)
+        V111_ANCHORS.put("dsp_display_render_ef", 0x00016950L); // void(byte slot, byte param) — renders EF param to LCD
     }
 
     /** MIDI status byte constants */
@@ -236,6 +239,7 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         applyLcdInitSignatures(namedFunctions);
         applyModelDetectSignature(namedFunctions);
         applyModelInitSignature(namedFunctions);
+        applyDspDisplayRenderEfSignature(namedFunctions);
 
         // -------------------------------------------------------------------
         // Step 2: Annotate SC0 UART register constants
@@ -507,6 +511,29 @@ public class DMP9_MidiAnalysis extends GhidraScript {
         // void led_sr_write(uint data) — clocks 16 bits into LED shift register at LED_SR_DATA (0x4D0000)
         setAppSignature(anchors.get("led_sr_write"), "void",
                 new String[][]{{"uint","data"}});
+
+        // LCD string helpers — short leaf routines, all use D0/D1/D2 for args.
+        // Tag with yamaha_reg so the decompiler treats register reads as params.
+        // Return types left as void; callers will narrow once arg signatures are
+        // confirmed from full disassembly.
+        setAppHelperConvention(anchors.get("lcd_format_num"));
+        setAppHelperConvention(anchors.get("lcd_str_padded_l"));
+        setAppHelperConvention(anchors.get("lcd_write_str"));
+        setAppHelperConvention(anchors.get("lcd_write_str_row"));
+    }
+
+    /** Tag a function with yamaha_reg without overriding its parameter list —
+     *  used for LCD helpers whose D0/D1/D2 register args are inferred by the
+     *  decompiler. */
+    private void setAppHelperConvention(Function fn) {
+        if (fn == null) return;
+        try {
+            fn.setCallingConvention(CC_APP);
+            println("[DMP9_MidiAnalysis] " + fn.getName() + " → " + CC_APP);
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set " + CC_APP
+                    + " on " + fn.getName() + ": " + e.getMessage());
+        }
     }
 
     private void setAppSignature(Function fn, String retType, String[][] params) {
@@ -640,6 +667,31 @@ public class DMP9_MidiAnalysis extends GhidraScript {
             setStdcallVoidVoid(f);
         } else {
             setAppSignature(f, "void", new String[][]{});
+        }
+    }
+
+    /**
+     * dsp_display_render_ef(byte effect_slot, byte param_index)
+     * Renders EF1/EF2 parameter display to LCD.
+     * Takes 2 byte args on stack (Stack[0x7]=effect_slot, Stack[0xB]=param_index).
+     * Uses dsp_display_s struct fields + DAT_0040754e display mode flag.
+     */
+    private void applyDspDisplayRenderEfSignature(Map<String, Function> anchors) {
+        Function f = anchors.get("dsp_display_render_ef");
+        if (f == null) return;
+        try {
+            f.setCallingConvention(CC_STDCALL);
+            List<ParameterImpl> params = new ArrayList<>();
+            params.add(new ParameterImpl("effect_slot", ByteDataType.dataType, currentProgram));
+            params.add(new ParameterImpl("param_index", ByteDataType.dataType, currentProgram));
+            f.replaceParameters(params,
+                FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                true, SourceType.ANALYSIS);
+            f.setReturnType(VoidDataType.dataType, SourceType.ANALYSIS);
+            println("[DMP9_MidiAnalysis] dsp_display_render_ef → __stdcall void(byte slot, byte param)");
+        } catch (Exception e) {
+            println("[DMP9_MidiAnalysis] WARN: could not set dsp_display_render_ef signature: "
+                    + e.getMessage());
         }
     }
 
